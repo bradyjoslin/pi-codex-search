@@ -164,10 +164,12 @@ function buildTool(config: ResolvedConfig) {
           if (signal) fetchOpts.signal = signal;
           if (onTextDelta) fetchOpts.onTextDelta = onTextDelta;
 
-          const result = await fetchCodexWebSearch(fetchOpts);
-          completed += 1;
-          if (total > 1) emitPartial(formatProgress(completed, total));
-          return result;
+          try {
+            return await fetchCodexWebSearch(fetchOpts);
+          } finally {
+            completed += 1;
+            if (total > 1) emitPartial(formatProgress(completed, total));
+          }
         }),
       );
 
