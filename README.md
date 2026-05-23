@@ -62,7 +62,7 @@ Inside Pi, run:
 
 Choose `ChatGPT Plus/Pro (Codex Subscription)` if Pi asks which provider to use. Pi stores and refreshes the credential.
 
-At `session_start`, this extension asks Pi for the `openai-codex` token. If no token is available, or if the ChatGPT account id cannot be found from the stored OAuth credential or decoded access token, it does not register `web_search`. In that case the model will not see the tool.
+The extension always registers `web_search`. If Pi has no `openai-codex` token, or if the ChatGPT account id cannot be recovered from the stored OAuth credential or decoded access token, the tool fails on first call with an `auth`-kind error pointing the user at `/login openai-codex`.
 
 ## Tool
 
@@ -72,26 +72,26 @@ The extension registers one tool:
 {
   "name": "web_search",
   "arguments": {
-    "query": "latest OpenAI Codex release notes",
+    "queries": ["latest OpenAI Codex release notes"],
     "search_context_size": "medium",
-    "live": true
+    "freshness": "live"
   }
 }
 ```
 
 Arguments:
 
-- `query` — required search question.
+- `queries` — required array of 1–5 search questions. Each query is dispatched in parallel; results are returned grouped by query.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
-- `live` — optional boolean; defaults to live web access.
+- `freshness` — optional, `live` or `cached`; `live` enables external web access, `cached` skips it. Defaults to `live`.
 
 The tool returns text plus a `Sources:` section when citations are available. The structured `details` object includes:
 
 - `model`
-- `responseId`
-- `searchCalls`
-- `citations`
-- `usage`
+- `freshness` / `searchContextSize`
+- `queryCount` / `failedQueryCount`
+- `successes`: per-query `{ query, text, citations, searchCalls, responseId?, usage? }`
+- `failures`: per-query `{ query, kind, message }` with `kind` one of `auth`, `rate_limit`, `transport`, `timeout`, `schema`, `unknown`
 
 ## Model used for search
 
@@ -109,7 +109,7 @@ Most users only need `/login openai-codex`. These env vars are here for debuggin
 
 - `PI_CODEX_WEB_SEARCH_MODEL` — force the Codex model used by the tool.
 - `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE` — default search context size: `low`, `medium`, or `high`.
-- `PI_CODEX_WEB_SEARCH_LIVE` — set to `false` to use cached web access.
+- `PI_CODEX_WEB_SEARCH_FRESHNESS` — default freshness when the tool call omits it: `live` or `cached`.
 - `PI_CODEX_WEB_SEARCH_BASE_URL` — override the Codex backend base URL.
 - `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` — override the `client_version` sent to `/codex/models`.
 
@@ -129,15 +129,15 @@ The extension builds the Codex request headers itself, including `Authorization`
 
 ## Troubleshooting
 
-### The model does not see `web_search`
+### `web_search` fails with an `auth`-kind error
 
-The tool is only registered when Codex auth is available at session start. Run:
+The tool is always registered, but the first call fails when Pi has no `openai-codex` token or the ChatGPT account id cannot be recovered. Run:
 
 ```text
 /login openai-codex
 ```
 
-Then start a new Pi session. If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`.
+If Pi asks for a provider, choose `ChatGPT Plus/Pro (Codex Subscription)`. The extension picks up the refreshed credential on the next call.
 
 ### `web_search` says the account id was not found
 
