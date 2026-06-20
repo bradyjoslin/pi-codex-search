@@ -139,6 +139,35 @@ describe("codex helpers", () => {
     ]);
   });
 
+  it("returns a concise Cloudflare error for standalone search 403", async () => {
+    const fetchImpl = async () =>
+      new Response("<html><title>Just a moment...</title><body>Cloudflare</body></html>", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "content-type": "text/html", "cf-ray": "test-ray" },
+      });
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /Cloudflare blocked the request/);
+        assert.match(error.message, /searchApi=responses/);
+        assert.doesNotMatch(error.message, /<html>/);
+        return true;
+      },
+    );
+  });
+
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });

@@ -238,7 +238,7 @@ export async function fetchCodexModels(options: {
     const status = response.status;
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex models request failed: HTTP ${status} ${await response.text()}`,
+      await formatCodexHttpError("Codex models request", response),
       status,
     );
   }
@@ -283,7 +283,7 @@ export async function fetchCodexStandaloneSearch(
     const status = response.status;
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex standalone search request failed: HTTP ${status} ${await response.text()}`,
+      await formatCodexHttpError("Codex standalone search request", response),
       status,
     );
   }
@@ -321,7 +321,7 @@ export async function fetchCodexWebSearch(
     const status = response.status;
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex web search request failed: HTTP ${status} ${await response.text()}`,
+      await formatCodexHttpError("Codex web search request", response),
       status,
     );
   }
@@ -391,6 +391,30 @@ export async function fetchCodexWebSearch(
         }
       : undefined,
   };
+}
+
+async function formatCodexHttpError(prefix: string, response: Response): Promise<string> {
+  const status = response.status;
+  const body = await response.text();
+  if (isCloudflareError(response, body)) {
+    return `${prefix} failed: HTTP ${status}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the previous /codex/responses path, then retry.`;
+  }
+  return `${prefix} failed: HTTP ${status} ${body}`;
+}
+
+function isCloudflareError(response: Response, body: string): boolean {
+  const server = response.headers.get("server")?.toLowerCase() ?? "";
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const lowerBody = body.slice(0, 4096).toLowerCase();
+  return (
+    server.includes("cloudflare") ||
+    response.headers.has("cf-ray") ||
+    response.headers.has("cf-cache-status") ||
+    (contentType.includes("text/html") &&
+      /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
+        lowerBody,
+      ))
+  );
 }
 
 function buildCodexHeaders(token: string, accountId: string, accept: string): Headers {
