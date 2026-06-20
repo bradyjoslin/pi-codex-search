@@ -5,9 +5,11 @@ import {
   CodexError,
   extractAccountIdFromToken,
   fetchCodexModels,
+  fetchCodexStandaloneSearch,
   fetchCodexWebSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
+  resolveCodexSearchEndpoint,
   selectDefaultModel,
 } from "../src/codex.ts";
 
@@ -32,6 +34,18 @@ describe("codex helpers", () => {
     assert.equal(
       resolveCodexEndpoint("https://example.test/root", "models"),
       "https://example.test/root/codex/models",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api"),
+      "https://chatgpt.com/backend-api/codex/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://api.openai.com/v1"),
+      "https://api.openai.com/v1/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/codex/responses"),
+      "https://chatgpt.com/backend-api/codex/alpha/search",
     );
   });
 
@@ -73,6 +87,56 @@ describe("codex helpers", () => {
         return true;
       },
     );
+  });
+
+  it("posts standalone search requests to /alpha/search", async () => {
+    let requestedUrl = "";
+    let requestedBody: unknown;
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          encrypted_output: "ciphertext",
+          output: "Search result from [OpenAI](https://openai.com).",
+        }),
+      );
+    };
+
+    const result = await fetchCodexStandaloneSearch({
+      query: "OpenAI news",
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      baseUrl: "https://example.test/backend/codex",
+      externalWebAccess: "indexed",
+      searchContextSize: "low",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
+    assert.deepEqual(requestedBody, {
+      id: "pi-codex-search",
+      model: "gpt-test",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "OpenAI news" }],
+        },
+      ],
+      commands: { search_query: [{ q: "OpenAI news" }] },
+      settings: {
+        search_context_size: "low",
+        allowed_callers: ["direct"],
+        external_web_access: "indexed",
+      },
+    });
+    assert.equal(result.text, "Search result from [OpenAI](https://openai.com).");
+    assert.equal(result.encryptedOutput, "ciphertext");
+    assert.deepEqual(result.citations, [
+      { title: "OpenAI", url: "https://openai.com", startIndex: 19 },
+    ]);
   });
 
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {

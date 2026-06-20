@@ -7,6 +7,7 @@ import {
   CONFIG_FILE_NAME,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
+  DEFAULT_SEARCH_API,
   DEFAULT_SEARCH_CONTEXT_SIZE,
   DEFAULT_TOOL_NAME,
   deleteConfig,
@@ -23,6 +24,7 @@ const ENV_KEYS = [
   "PI_CODEX_WEB_SEARCH_CLIENT_VERSION",
   "PI_CODEX_WEB_SEARCH_CONTEXT_SIZE",
   "PI_CODEX_WEB_SEARCH_FRESHNESS",
+  "PI_CODEX_WEB_SEARCH_API",
 ] as const;
 
 describe("config loader", () => {
@@ -61,6 +63,7 @@ describe("config loader", () => {
     assert.equal(resolved.toolName, DEFAULT_TOOL_NAME);
     assert.equal(resolved.defaultFreshness, DEFAULT_FRESHNESS);
     assert.equal(resolved.defaultSearchContextSize, DEFAULT_SEARCH_CONTEXT_SIZE);
+    assert.equal(resolved.searchApi, DEFAULT_SEARCH_API);
     assert.equal(resolved.model, undefined);
     assert.deepEqual(resolved.sources, {});
   });
@@ -188,6 +191,20 @@ describe("config loader", () => {
   it("rejects an invalid freshness value", async () => {
     process.env.PI_CODEX_WEB_SEARCH_FRESHNESS = "stale";
     await assert.rejects(loadConfig(cwd), /Invalid freshness/);
+  });
+
+  it("reads indexed freshness and responses search API from env", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_FRESHNESS = "indexed";
+    process.env.PI_CODEX_WEB_SEARCH_API = "responses";
+
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.defaultFreshness, "indexed");
+    assert.equal(resolved.searchApi, "responses");
+  });
+
+  it("rejects an invalid searchApi value", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_API = "other";
+    await assert.rejects(loadConfig(cwd), /Invalid searchApi/);
   });
 
   it("rejects an invalid searchContextSize value", async () => {

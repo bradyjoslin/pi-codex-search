@@ -1,9 +1,9 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { SearchContextSize } from "./codex.ts";
+import type { SearchApi, SearchContextSize } from "./codex.ts";
 
-export type Freshness = "live" | "cached";
+export type Freshness = "live" | "cached" | "indexed";
 
 export type ConfigScope = "project" | "home";
 
@@ -15,6 +15,7 @@ export interface PiCodexSearchConfig {
   clientVersion?: string;
   searchContextSize?: SearchContextSize;
   freshness?: Freshness;
+  searchApi?: SearchApi;
 }
 
 export interface ResolvedConfig {
@@ -25,6 +26,7 @@ export interface ResolvedConfig {
   clientVersion?: string;
   defaultSearchContextSize: SearchContextSize;
   defaultFreshness: Freshness;
+  searchApi: SearchApi;
   sources: {
     project?: PiCodexSearchConfig;
     home?: PiCodexSearchConfig;
@@ -36,10 +38,12 @@ export const DEFAULT_ENABLED = true;
 export const DEFAULT_TOOL_NAME = "codex_search";
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 export const DEFAULT_FRESHNESS: Freshness = "live";
+export const DEFAULT_SEARCH_API: SearchApi = "standalone";
 export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
-const FRESHNESS_VALUES: readonly Freshness[] = ["live", "cached"] as const;
+const FRESHNESS_VALUES: readonly Freshness[] = ["live", "cached", "indexed"] as const;
+const SEARCH_API_VALUES: readonly SearchApi[] = ["standalone", "responses"] as const;
 
 export function getConfigPath(scope: ConfigScope, cwd: string): string {
   if (scope === "project") return join(cwd, ".pi", CONFIG_FILE_NAME);
@@ -62,6 +66,7 @@ export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
     toolName: merged.toolName ?? DEFAULT_TOOL_NAME,
     defaultSearchContextSize: merged.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE,
     defaultFreshness: merged.freshness ?? DEFAULT_FRESHNESS,
+    searchApi: merged.searchApi ?? DEFAULT_SEARCH_API,
     sources: {},
   };
   if (merged.model !== undefined) resolved.model = merged.model;
@@ -138,6 +143,8 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   }
   const freshness = trimmedEnv("PI_CODEX_WEB_SEARCH_FRESHNESS");
   if (freshness !== undefined) env.freshness = freshness as Freshness;
+  const searchApi = trimmedEnv("PI_CODEX_WEB_SEARCH_API");
+  if (searchApi !== undefined) env.searchApi = searchApi as SearchApi;
 
   if (Object.keys(env).length === 0) return undefined;
   validateConfig(env, "<env>");
@@ -175,6 +182,12 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
     throw new Error(
       `Invalid freshness in ${sourceLabel}: ${JSON.stringify(config.freshness)}. ` +
         `Expected one of ${FRESHNESS_VALUES.join(", ")}.`,
+    );
+  }
+  if (config.searchApi !== undefined && !SEARCH_API_VALUES.includes(config.searchApi)) {
+    throw new Error(
+      `Invalid searchApi in ${sourceLabel}: ${JSON.stringify(config.searchApi)}. ` +
+        `Expected one of ${SEARCH_API_VALUES.join(", ")}.`,
     );
   }
 }

@@ -25,7 +25,8 @@ This extension is for Pi workflows that need fresh or source-backed information:
 
 - A `codex_search` Pi tool.
 - 1–5 search queries per call, run in parallel.
-- `live` or `cached` freshness, plus `low` / `medium` / `high` search context size.
+- Standalone `/alpha/search` by default, with the older `/codex/responses` web-search path still available.
+- `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
 - Structured details: model, citations, search calls, response ids, usage, and per-query failures.
@@ -94,13 +95,14 @@ Arguments:
 
 - `queries` — required array of 1–5 search questions. Queries run in parallel; results are grouped by query.
 - `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
-- `freshness` — optional, `live` or `cached`; defaults to `live`.
+- `freshness` — optional, `live`, `indexed`, or `cached`; defaults to `live`.
 
 The tool returns text. When citations are available, the text includes a `Sources:` section.
 
 The structured `details` object includes:
 
 - `model`
+- `api`
 - `freshness` / `searchContextSize`
 - `queryCount` / `failedQueryCount`
 - `successes`: per-query `{ query, text, citations, searchCalls, responseId?, usage? }`
@@ -153,13 +155,16 @@ Full schema, all fields optional:
   "baseUrl": "https://chatgpt.com/backend-api",
   "clientVersion": "1.0.0",
   "searchContextSize": "medium",
-  "freshness": "live"
+  "freshness": "live",
+  "searchApi": "standalone"
 }
 ```
 
 `enabled: false` skips tool registration entirely. The model will not see `codex_search` at all.
 
 `toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
+
+`searchApi` chooses the backend path. `standalone` posts search commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases. `responses` keeps the previous `/codex/responses` hosted web-search flow.
 
 Environment variable equivalents:
 
@@ -172,6 +177,7 @@ Environment variable equivalents:
 | `clientVersion`     | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
 | `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
 | `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
+| `searchApi`         | `PI_CODEX_WEB_SEARCH_API`            |
 
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 

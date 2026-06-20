@@ -13,9 +13,11 @@ import {
   type CodexSearchCall,
   extractAccountIdFromToken,
   fetchCodexModels,
+  fetchCodexStandaloneSearch,
   fetchCodexWebSearch,
   selectDefaultModel,
   type SearchContextSize,
+  type StandaloneExternalWebAccess,
 } from "./src/codex.ts";
 import { registerSettingsCommand } from "./src/command.ts";
 import { type Freshness, loadConfig, type ResolvedConfig } from "./src/config.ts";
@@ -49,6 +51,7 @@ interface WebSearchFailureDetail {
 
 interface WebSearchDetails {
   model: string;
+  api: string;
   freshness: Freshness;
   searchContextSize: SearchContextSize;
   queryCount: number;
@@ -85,8 +88,8 @@ function buildTool(config: ResolvedConfig) {
         }),
       ),
       freshness: Type.Optional(
-        StringEnum(["cached", "live"] as const, {
-          description: `Use 'live' for time-sensitive queries; 'cached' for stable topics. Defaults to ${config.defaultFreshness}.`,
+        StringEnum(["cached", "indexed", "live"] as const, {
+          description: `Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to ${config.defaultFreshness}.`,
         }),
       ),
     }),
@@ -128,6 +131,7 @@ function buildTool(config: ResolvedConfig) {
           content: [{ type: "text", text: partialText }],
           details: {
             model,
+            api: config.searchApi,
             freshness,
             searchContextSize,
             queryCount: total,
@@ -152,20 +156,18 @@ function buildTool(config: ResolvedConfig) {
                   emitPartial(streamedText);
                 }
               : undefined;
-          const fetchOpts: Parameters<typeof fetchCodexWebSearch>[0] = {
-            query,
-            token,
-            accountId,
-            model,
-            externalWebAccess: freshness === "live",
-            searchContextSize,
-          };
-          if (config.baseUrl !== undefined) fetchOpts.baseUrl = config.baseUrl;
-          if (signal) fetchOpts.signal = signal;
-          if (onTextDelta) fetchOpts.onTextDelta = onTextDelta;
-
           try {
-            return await fetchCodexWebSearch(fetchOpts);
+            return await runCodexSearch({
+              query,
+              token,
+              accountId,
+              model,
+              freshness,
+              searchContextSize,
+              config,
+              signal,
+              onTextDelta,
+            });
           } finally {
             completed += 1;
             if (total > 1) emitPartial(formatProgress(completed, total));
@@ -217,6 +219,7 @@ function buildTool(config: ResolvedConfig) {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
         details: {
           model,
+          api: config.searchApi,
           freshness,
           searchContextSize,
           queryCount: total,
@@ -239,7 +242,7 @@ function buildTool(config: ResolvedConfig) {
       } else {
         text += theme.fg("accent", `${queries.length} queries`);
       }
-      text += theme.fg("dim", ` [${ctxSize}/${fresh}]`);
+      text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
       return new Text(text, 0, 0);
     },
 
@@ -276,7 +279,10 @@ function buildTool(config: ResolvedConfig) {
           `✓ ${sourceCount} source${sourceCount === 1 ? "" : "s"}${querySuffix}`,
         );
       }
-      header += theme.fg("muted", ` [${details.searchContextSize}/${details.freshness}]`);
+      header += theme.fg(
+        "muted",
+        ` [${details.api}/${details.searchContextSize}/${details.freshness}]`,
+      );
 
       if (!expanded) {
         const preview = renderCollapsedPreview(details, theme);
@@ -347,6 +353,52 @@ async function resolveSearchModel(
     throw new Error("Codex model list is empty.");
   }
   return model;
+}
+
+async function runCodexSearch(options: {
+  query: string;
+  token: string;
+  accountId: string;
+  model: string;
+  freshness: Freshness;
+  searchContextSize: SearchContextSize;
+  config: ResolvedConfig;
+  signal: AbortSignal | undefined;
+  onTextDelta: ((delta: string) => void) | undefined;
+}) {
+  if (options.config.searchApi === "standalone") {
+    const fetchOpts: Parameters<typeof fetchCodexStandaloneSearch>[0] = {
+      query: options.query,
+      token: options.token,
+      accountId: options.accountId,
+      model: options.model,
+      externalWebAccess: standaloneExternalWebAccess(options.freshness),
+      searchContextSize: options.searchContextSize,
+    };
+    if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
+    if (options.signal) fetchOpts.signal = options.signal;
+    return await fetchCodexStandaloneSearch(fetchOpts);
+  }
+
+  const fetchOpts: Parameters<typeof fetchCodexWebSearch>[0] = {
+    query: options.query,
+    token: options.token,
+    accountId: options.accountId,
+    model: options.model,
+    externalWebAccess: options.freshness !== "cached",
+    searchContextSize: options.searchContextSize,
+  };
+  if (options.freshness === "indexed") fetchOpts.indexGatedWebAccess = true;
+  if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
+  if (options.signal) fetchOpts.signal = options.signal;
+  if (options.onTextDelta) fetchOpts.onTextDelta = options.onTextDelta;
+  return await fetchCodexWebSearch(fetchOpts);
+}
+
+function standaloneExternalWebAccess(freshness: Freshness): StandaloneExternalWebAccess {
+  if (freshness === "cached") return false;
+  if (freshness === "indexed") return "indexed";
+  return true;
 }
 
 function formatProgress(completed: number, total: number): string {
