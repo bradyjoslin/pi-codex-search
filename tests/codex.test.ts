@@ -40,6 +40,10 @@ describe("codex helpers", () => {
       "https://chatgpt.com/backend-api/codex/alpha/search",
     );
     assert.equal(
+      resolveCodexSearchEndpoint("https://api.openai.com"),
+      "https://api.openai.com/v1/alpha/search",
+    );
+    assert.equal(
       resolveCodexSearchEndpoint("https://api.openai.com/v1"),
       "https://api.openai.com/v1/alpha/search",
     );
@@ -163,6 +167,34 @@ describe("codex helpers", () => {
         assert.match(error.message, /Cloudflare blocked the request/);
         assert.match(error.message, /searchApi=responses/);
         assert.doesNotMatch(error.message, /<html>/);
+        return true;
+      },
+    );
+  });
+
+  it("keeps backend error details when Cloudflare headers wrap a JSON API error", async () => {
+    const fetchImpl = async () =>
+      new Response('{"error":"backend denied"}', {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "content-type": "application/json", "cf-ray": "test-ray" },
+      });
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /backend denied/);
+        assert.doesNotMatch(error.message, /Cloudflare blocked the request/);
         return true;
       },
     );

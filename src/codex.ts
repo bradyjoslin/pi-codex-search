@@ -192,9 +192,8 @@ export function resolveCodexSearchEndpoint(baseUrl: string | undefined): string 
     return normalized;
   }
   if (normalized.endsWith("/codex")) return `${normalized}/alpha/search`;
-  if (normalized.endsWith("/v1") || normalized.includes("api.openai.com")) {
-    return `${normalized}/alpha/search`;
-  }
+  if (normalized.endsWith("/v1")) return `${normalized}/alpha/search`;
+  if (isOpenAiRootBaseUrl(normalized)) return `${normalized}/v1/alpha/search`;
   return `${normalized}/codex/alpha/search`;
 }
 
@@ -402,18 +401,23 @@ async function formatCodexHttpError(prefix: string, response: Response): Promise
   return `${prefix} failed: HTTP ${status} ${body}`;
 }
 
+function isOpenAiRootBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "api.openai.com" && (url.pathname === "" || url.pathname === "/");
+  } catch {
+    return false;
+  }
+}
+
 function isCloudflareError(response: Response, body: string): boolean {
-  const server = response.headers.get("server")?.toLowerCase() ?? "";
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const lowerBody = body.slice(0, 4096).toLowerCase();
-  return (
-    server.includes("cloudflare") ||
-    response.headers.has("cf-ray") ||
-    response.headers.has("cf-cache-status") ||
-    (contentType.includes("text/html") &&
-      /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
-        lowerBody,
-      ))
+  const isHtml =
+    contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/.test(lowerBody);
+  if (!isHtml) return false;
+  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
+    lowerBody,
   );
 }
 
