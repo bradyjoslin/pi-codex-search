@@ -4,6 +4,7 @@ import {
   type ConfigScope,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
+  DEFAULT_SEARCH_API,
   DEFAULT_SEARCH_CONTEXT_SIZE,
   DEFAULT_TOOL_NAME,
   deleteConfig,
@@ -14,14 +15,14 @@ import {
   type ResolvedConfig,
   saveConfig,
 } from "./config.ts";
-import type { SearchContextSize } from "./codex.ts";
+import type { SearchApi, SearchContextSize } from "./codex.ts";
 
 const COMMAND_NAME = "codex-search-settings";
 const SUBCOMMANDS = ["status", "reset"] as const;
 
 export function registerSettingsCommand(pi: ExtensionAPI): void {
   pi.registerCommand(COMMAND_NAME, {
-    description: "Configure pi-codex-search (tool name, model, defaults, freshness).",
+    description: "Configure pi-codex-search (tool name, model, API, defaults, freshness).",
     getArgumentCompletions(prefix) {
       const lower = prefix.toLowerCase();
       const matches = SUBCOMMANDS.filter((name) => name.startsWith(lower));
@@ -122,6 +123,7 @@ async function editScope(ctx: ExtensionCommandContext, scope: ConfigScope): Prom
       `Client version → ${formatValue(current.clientVersion, "default")}`,
       `Search context size → ${formatValue(current.searchContextSize, DEFAULT_SEARCH_CONTEXT_SIZE)}`,
       `Freshness → ${formatValue(current.freshness, DEFAULT_FRESHNESS)}`,
+      `Search API → ${formatValue(current.searchApi, DEFAULT_SEARCH_API)}`,
       "Back",
     ]);
 
@@ -172,10 +174,17 @@ async function editScope(ctx: ExtensionCommandContext, scope: ConfigScope): Prom
       continue;
     }
     if (choice.startsWith("Freshness")) {
-      const value = await ctx.ui.select("Freshness", ["live", "cached", "Clear"]);
+      const value = await ctx.ui.select("Freshness", ["live", "cached", "indexed", "Clear"]);
       if (!value) continue;
       const next = value === "Clear" ? undefined : (value as Freshness);
       if (await applyEnumField(ctx, scope, current, "freshness", next)) saved = true;
+      continue;
+    }
+    if (choice.startsWith("Search API")) {
+      const value = await ctx.ui.select("Search API", ["standalone", "responses", "Clear"]);
+      if (!value) continue;
+      const next = value === "Clear" ? undefined : (value as SearchApi);
+      if (await applyEnumField(ctx, scope, current, "searchApi", next)) saved = true;
       continue;
     }
   }
@@ -228,7 +237,7 @@ async function applyTextField(
   return await persist(ctx, scope, next, key);
 }
 
-async function applyEnumField<K extends "searchContextSize" | "freshness">(
+async function applyEnumField<K extends "searchContextSize" | "freshness" | "searchApi">(
   ctx: ExtensionCommandContext,
   scope: ConfigScope,
   current: PiCodexSearchConfig,
@@ -284,7 +293,7 @@ async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
 function buildMainTitle(resolved: ResolvedConfig, cwd: string): string {
   return [
     "Codex Search settings",
-    `Effective: enabled=${resolved.enabled}, tool=${resolved.toolName}, model=${resolved.model ?? "(auto)"}, freshness=${resolved.defaultFreshness}, contextSize=${resolved.defaultSearchContextSize}`,
+    `Effective: enabled=${resolved.enabled}, tool=${resolved.toolName}, model=${resolved.model ?? "(auto)"}, api=${resolved.searchApi}, freshness=${resolved.defaultFreshness}, contextSize=${resolved.defaultSearchContextSize}`,
     `Project file: ${relative(cwd, getConfigPath("project", cwd))}${resolved.sources.project ? "" : " (absent)"}`,
     `Home file: ${homeRelative(getConfigPath("home", cwd))}${resolved.sources.home ? "" : " (absent)"}`,
   ].join("\n");
@@ -299,6 +308,7 @@ function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
+  lines.push(`  searchApi           = ${resolved.searchApi}`);
   lines.push("");
   lines.push("Sources (env > project > home):");
   lines.push(`  env     = ${describeSource(resolved.sources.env)}`);

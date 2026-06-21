@@ -1,4 +1,6 @@
 export type SearchContextSize = "low" | "medium" | "high";
+export type SearchApi = "standalone" | "responses";
+export type StandaloneExternalWebAccess = boolean | "indexed";
 
 export type CodexErrorKind = "auth" | "rate_limit" | "transport" | "timeout" | "schema" | "unknown";
 
@@ -50,9 +52,23 @@ export interface CodexWebSearchOptions {
   model: string;
   baseUrl?: string;
   externalWebAccess?: boolean;
+  indexGatedWebAccess?: boolean;
   searchContextSize?: SearchContextSize;
   signal?: AbortSignal;
   onTextDelta?: (delta: string) => void;
+  fetchImpl?: typeof fetch;
+}
+
+export interface CodexStandaloneSearchOptions {
+  query: string;
+  token: string;
+  accountId: string;
+  model: string;
+  baseUrl?: string;
+  externalWebAccess?: StandaloneExternalWebAccess;
+  searchContextSize?: SearchContextSize;
+  sessionId?: string;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
 }
 
@@ -82,6 +98,7 @@ export interface CodexWebSearchResult {
     outputTokens?: number;
     totalTokens?: number;
   };
+  encryptedOutput?: string;
 }
 
 interface SseEvent {
@@ -137,6 +154,11 @@ interface ResponseEventData {
   };
 }
 
+interface StandaloneSearchResponse {
+  encrypted_output?: string;
+  output?: string;
+}
+
 const DEFAULT_BASE_URL = "https://chatgpt.com/backend-api";
 const DEFAULT_CLIENT_VERSION = "1.0.0";
 const ACCOUNT_ID_CLAIM = "https://api.openai.com/auth";
@@ -155,6 +177,24 @@ export function resolveCodexEndpoint(
   path: "models" | "responses",
 ): string {
   return `${normalizeCodexBaseUrl(baseUrl)}/codex/${path}`;
+}
+
+export function resolveCodexSearchEndpoint(baseUrl: string | undefined): string {
+  const raw = baseUrl && baseUrl.trim().length > 0 ? baseUrl : DEFAULT_BASE_URL;
+  let normalized = raw.replace(/\/+$/, "");
+  if (normalized.endsWith("/codex/responses")) {
+    normalized = normalized.slice(0, -"/responses".length);
+  }
+  if (normalized.endsWith("/codex/models")) {
+    normalized = normalized.slice(0, -"/models".length);
+  }
+  if (normalized.endsWith("/codex/alpha/search") || normalized.endsWith("/alpha/search")) {
+    return normalized;
+  }
+  if (normalized.endsWith("/codex")) return `${normalized}/alpha/search`;
+  if (normalized.endsWith("/v1")) return `${normalized}/alpha/search`;
+  if (isOpenAiRootBaseUrl(normalized)) return `${normalized}/v1/alpha/search`;
+  return `${normalized}/codex/alpha/search`;
 }
 
 export function extractAccountIdFromToken(token: string): string | undefined {
@@ -197,7 +237,7 @@ export async function fetchCodexModels(options: {
     const status = response.status;
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex models request failed: HTTP ${status} ${await response.text()}`,
+      await formatCodexHttpError("Codex models request", response),
       status,
     );
   }
@@ -224,6 +264,47 @@ export function selectDefaultModel(models: CodexModel[]): string | undefined {
   return (models.find((model) => model.isDefault) ?? models[0])?.id;
 }
 
+export async function fetchCodexStandaloneSearch(
+  options: CodexStandaloneSearchOptions,
+): Promise<CodexWebSearchResult> {
+  const fetcher = options.fetchImpl ?? fetch;
+  const headers = buildCodexHeaders(options.token, options.accountId, "application/json");
+  headers.set("content-type", "application/json");
+
+  const response = await fetcher(resolveCodexSearchEndpoint(options.baseUrl), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(buildStandaloneSearchRequestBody(options)),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    const status = response.status;
+    throw new CodexError(
+      classifyHttpStatus(status),
+      await formatCodexHttpError("Codex standalone search request", response),
+      status,
+    );
+  }
+
+  const data = (await response.json()) as StandaloneSearchResponse;
+  const text = typeof data.output === "string" ? data.output : "";
+  const result: CodexWebSearchResult = {
+    model: options.model,
+    text,
+    searchCalls: [
+      {
+        status: "completed",
+        query: options.query,
+        actionType: "search_query",
+      },
+    ],
+    citations: extractMarkdownCitations(text),
+  };
+  if (data.encrypted_output !== undefined) result.encryptedOutput = data.encrypted_output;
+  return result;
+}
+
 export async function fetchCodexWebSearch(
   options: CodexWebSearchOptions,
 ): Promise<CodexWebSearchResult> {
@@ -239,7 +320,7 @@ export async function fetchCodexWebSearch(
     const status = response.status;
     throw new CodexError(
       classifyHttpStatus(status),
-      `Codex web search request failed: HTTP ${status} ${await response.text()}`,
+      await formatCodexHttpError("Codex web search request", response),
       status,
     );
   }
@@ -311,6 +392,35 @@ export async function fetchCodexWebSearch(
   };
 }
 
+async function formatCodexHttpError(prefix: string, response: Response): Promise<string> {
+  const status = response.status;
+  const body = await response.text();
+  if (isCloudflareError(response, body)) {
+    return `${prefix} failed: HTTP ${status}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the previous /codex/responses path, then retry.`;
+  }
+  return `${prefix} failed: HTTP ${status} ${body}`;
+}
+
+function isOpenAiRootBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname === "api.openai.com" && (url.pathname === "" || url.pathname === "/");
+  } catch {
+    return false;
+  }
+}
+
+function isCloudflareError(response: Response, body: string): boolean {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  const lowerBody = body.slice(0, 4096).toLowerCase();
+  const isHtml =
+    contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/.test(lowerBody);
+  if (!isHtml) return false;
+  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
+    lowerBody,
+  );
+}
+
 function buildCodexHeaders(token: string, accountId: string, accept: string): Headers {
   const headers = new Headers();
   headers.set("Authorization", `Bearer ${token}`);
@@ -325,7 +435,38 @@ function buildCodexHeaders(token: string, accountId: string, accept: string): He
   return headers;
 }
 
+function buildStandaloneSearchRequestBody(options: CodexStandaloneSearchOptions) {
+  return {
+    id: options.sessionId ?? "pi-codex-search",
+    model: options.model,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: options.query }],
+      },
+    ],
+    commands: {
+      search_query: [{ q: options.query }],
+    },
+    settings: {
+      search_context_size: options.searchContextSize ?? "medium",
+      allowed_callers: ["direct"],
+      external_web_access: options.externalWebAccess ?? true,
+    },
+  };
+}
+
 function buildWebSearchRequestBody(options: CodexWebSearchOptions) {
+  const webSearchTool: Record<string, unknown> = {
+    type: "web_search",
+    external_web_access: options.externalWebAccess ?? true,
+    search_context_size: options.searchContextSize ?? "medium",
+  };
+  if (options.indexGatedWebAccess !== undefined) {
+    webSearchTool.index_gated_web_access = options.indexGatedWebAccess;
+  }
+
   return {
     model: options.model,
     instructions:
@@ -337,13 +478,7 @@ function buildWebSearchRequestBody(options: CodexWebSearchOptions) {
         content: [{ type: "input_text", text: options.query }],
       },
     ],
-    tools: [
-      {
-        type: "web_search",
-        external_web_access: options.externalWebAccess ?? true,
-        search_context_size: options.searchContextSize ?? "medium",
-      },
-    ],
+    tools: [webSearchTool],
     tool_choice: "required",
     parallel_tool_calls: true,
     store: false,
@@ -399,6 +534,18 @@ function parseSseFrame(frame: string): SseEvent | undefined {
   } catch {
     return { type, raw };
   }
+}
+
+function extractMarkdownCitations(text: string): CodexCitation[] {
+  const citations = new Map<string, CodexCitation>();
+  const markdownLinkPattern = /\[([^\]\n]{1,200})\]\((https?:\/\/[^)\s]+)\)/g;
+  for (const match of text.matchAll(markdownLinkPattern)) {
+    const title = match[1]?.trim();
+    const url = match[2]?.trim();
+    if (!url || citations.has(url)) continue;
+    citations.set(url, { title: title || url, url, startIndex: match.index });
+  }
+  return [...citations.values()];
 }
 
 function collectOutputItem(

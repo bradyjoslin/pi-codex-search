@@ -5,9 +5,11 @@ import {
   CodexError,
   extractAccountIdFromToken,
   fetchCodexModels,
+  fetchCodexStandaloneSearch,
   fetchCodexWebSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
+  resolveCodexSearchEndpoint,
   selectDefaultModel,
 } from "../src/codex.ts";
 
@@ -32,6 +34,22 @@ describe("codex helpers", () => {
     assert.equal(
       resolveCodexEndpoint("https://example.test/root", "models"),
       "https://example.test/root/codex/models",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api"),
+      "https://chatgpt.com/backend-api/codex/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://api.openai.com"),
+      "https://api.openai.com/v1/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://api.openai.com/v1"),
+      "https://api.openai.com/v1/alpha/search",
+    );
+    assert.equal(
+      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/codex/responses"),
+      "https://chatgpt.com/backend-api/codex/alpha/search",
     );
   });
 
@@ -70,6 +88,113 @@ describe("codex helpers", () => {
         assert.ok(error instanceof CodexError);
         assert.equal(error.kind, "auth");
         assert.equal(error.status, 401);
+        return true;
+      },
+    );
+  });
+
+  it("posts standalone search requests to /alpha/search", async () => {
+    let requestedUrl = "";
+    let requestedBody: unknown;
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          encrypted_output: "ciphertext",
+          output: "Search result from [OpenAI](https://openai.com).",
+        }),
+      );
+    };
+
+    const result = await fetchCodexStandaloneSearch({
+      query: "OpenAI news",
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      baseUrl: "https://example.test/backend/codex",
+      externalWebAccess: "indexed",
+      searchContextSize: "low",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
+    assert.deepEqual(requestedBody, {
+      id: "pi-codex-search",
+      model: "gpt-test",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "OpenAI news" }],
+        },
+      ],
+      commands: { search_query: [{ q: "OpenAI news" }] },
+      settings: {
+        search_context_size: "low",
+        allowed_callers: ["direct"],
+        external_web_access: "indexed",
+      },
+    });
+    assert.equal(result.text, "Search result from [OpenAI](https://openai.com).");
+    assert.equal(result.encryptedOutput, "ciphertext");
+    assert.deepEqual(result.citations, [
+      { title: "OpenAI", url: "https://openai.com", startIndex: 19 },
+    ]);
+  });
+
+  it("returns a concise Cloudflare error for standalone search 403", async () => {
+    const fetchImpl = async () =>
+      new Response("<html><title>Just a moment...</title><body>Cloudflare</body></html>", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "content-type": "text/html", "cf-ray": "test-ray" },
+      });
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /Cloudflare blocked the request/);
+        assert.match(error.message, /searchApi=responses/);
+        assert.doesNotMatch(error.message, /<html>/);
+        return true;
+      },
+    );
+  });
+
+  it("keeps backend error details when Cloudflare headers wrap a JSON API error", async () => {
+    const fetchImpl = async () =>
+      new Response('{"error":"backend denied"}', {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "content-type": "application/json", "cf-ray": "test-ray" },
+      });
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /backend denied/);
+        assert.doesNotMatch(error.message, /Cloudflare blocked the request/);
         return true;
       },
     );
