@@ -58,7 +58,10 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Enabled",
     description: "Register the search tool at session start",
     values: [defaultTag(String(DEFAULT_ENABLED)), "false"],
-    get: (c) => (c.enabled === undefined ? defaultTag(String(DEFAULT_ENABLED)) : String(c.enabled)),
+    get: (c) =>
+      c.enabled === undefined || c.enabled === DEFAULT_ENABLED
+        ? defaultTag(String(DEFAULT_ENABLED))
+        : String(c.enabled),
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.enabled;
       else c.enabled = v === "true";
@@ -69,7 +72,10 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Search API",
     description: "responses (stable) or standalone (experimental) backend",
     values: [defaultTag(DEFAULT_SEARCH_API), "standalone"],
-    get: (c) => c.searchApi ?? defaultTag(DEFAULT_SEARCH_API),
+    get: (c) =>
+      c.searchApi === undefined || c.searchApi === DEFAULT_SEARCH_API
+        ? defaultTag(DEFAULT_SEARCH_API)
+        : c.searchApi,
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.searchApi;
       else c.searchApi = v as PiCodexSearchConfig["searchApi"];
@@ -80,7 +86,10 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Freshness",
     description: "live / indexed / cached web access",
     values: [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
-    get: (c) => c.freshness ?? defaultTag(DEFAULT_FRESHNESS),
+    get: (c) =>
+      c.freshness === undefined || c.freshness === DEFAULT_FRESHNESS
+        ? defaultTag(DEFAULT_FRESHNESS)
+        : c.freshness,
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.freshness;
       else c.freshness = v as PiCodexSearchConfig["freshness"];
@@ -91,7 +100,10 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Search context size",
     description: "Amount of web context to retrieve",
     values: [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
-    get: (c) => c.searchContextSize ?? defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE),
+    get: (c) =>
+      c.searchContextSize === undefined || c.searchContextSize === DEFAULT_SEARCH_CONTEXT_SIZE
+        ? defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE)
+        : c.searchContextSize,
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.searchContextSize;
       else c.searchContextSize = v as PiCodexSearchConfig["searchContextSize"];
@@ -206,6 +218,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
   };
   let scope: ConfigScope = isProjectTrusted ? "project" : "home";
   let dirty = false;
+  let saveQueue: Promise<void> = Promise.resolve();
 
   let models: CodexModel[] = [];
 
@@ -226,13 +239,16 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
         ctx.ui.notify("Project config cannot be saved until the project is trusted.", "warning");
         return;
       }
-      saveConfig(scope, ctx.cwd, drafts[scope])
-        .then(() => {
+      const currentScope = scope;
+      const currentDraft = { ...drafts[scope] };
+      saveQueue = saveQueue.then(async () => {
+        try {
+          await saveConfig(currentScope, ctx.cwd, currentDraft);
           dirty = true;
-        })
-        .catch((error: unknown) => {
+        } catch (error: unknown) {
           ctx.ui.notify((error as Error).message, "error");
-        });
+        }
+      });
     };
 
     const onChange = (id: string, newValue: string) => {
@@ -325,6 +341,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     return list as Component;
   });
 
+  await saveQueue;
   if (dirty) await ctx.reload();
 }
 
