@@ -162,7 +162,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
       const trimmed = args.trim();
       try {
         if (!trimmed) {
-          if (ctx.hasUI) {
+          if (ctx.mode === "tui") {
             await openSettingsMenu(ctx);
             return;
           }
@@ -175,7 +175,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
         }
         if (trimmed === "reset") {
           if (ctx.hasUI) {
-            await openResetMenu(ctx);
+            await openResetMenu(ctx, ctx.isProjectTrusted());
           } else {
             notify(
               ctx,
@@ -198,12 +198,13 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
 }
 
 async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
-  const resolved = await loadConfig(ctx.cwd);
+  const isProjectTrusted = ctx.isProjectTrusted();
+  const resolved = await loadConfig(ctx.cwd, isProjectTrusted);
   const drafts: Record<ConfigScope, PiCodexSearchConfig> = {
     project: { ...resolved.sources.project },
     home: { ...resolved.sources.home },
   };
-  let scope: ConfigScope = "project";
+  let scope: ConfigScope = isProjectTrusted ? "project" : "home";
   let dirty = false;
 
   let models: CodexModel[] = [];
@@ -226,6 +227,10 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     };
 
     const save = () => {
+      if (scope === "project" && !isProjectTrusted) {
+        ctx.ui.notify("Project config cannot be saved until the project is trusted.", "warning");
+        return;
+      }
       saveConfig(scope, ctx.cwd, drafts[scope])
         .then(() => {
           dirty = true;
@@ -258,9 +263,11 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     const scopeItem: SettingItem = {
       id: "scope",
       label: "Config scope",
-      description: formatScopeDescription(scope, ctx.cwd),
+      description: isProjectTrusted
+        ? formatScopeDescription(scope, ctx.cwd)
+        : "Project config disabled until the project is trusted; editing home config only",
       currentValue: scope,
-      values: ["project", "home"],
+      values: isProjectTrusted ? ["project", "home"] : ["home"],
     };
 
     const items: SettingItem[] = [
@@ -362,15 +369,21 @@ async function loadModels(
   return fetchCodexModels(opts);
 }
 
-async function openResetMenu(ctx: ExtensionCommandContext): Promise<boolean> {
+async function openResetMenu(
+  ctx: ExtensionCommandContext,
+  isProjectTrusted: boolean,
+): Promise<boolean> {
   let removed = false;
 
   while (true) {
-    const choice = await ctx.ui.select("Reset configuration", [
-      `Delete project config (${relative(ctx.cwd, getConfigPath("project", ctx.cwd))})`,
+    const options = [
+      ...(isProjectTrusted
+        ? [`Delete project config (${relative(ctx.cwd, getConfigPath("project", ctx.cwd))})`]
+        : []),
       `Delete home config (${homeRelative(getConfigPath("home", ctx.cwd))})`,
       "Back",
-    ]);
+    ];
+    const choice = await ctx.ui.select("Reset configuration", options);
 
     if (!choice || choice === "Back") return removed;
 
@@ -393,7 +406,7 @@ async function openResetMenu(ctx: ExtensionCommandContext): Promise<boolean> {
 }
 
 async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
-  const resolved = await loadConfig(ctx.cwd);
+  const resolved = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
   notify(ctx, formatStatus(resolved, ctx.cwd));
 }
 

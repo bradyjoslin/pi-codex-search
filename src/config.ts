@@ -50,9 +50,11 @@ export function getConfigPath(scope: ConfigScope, cwd: string): string {
   return join(homedir(), ".pi", CONFIG_FILE_NAME);
 }
 
-export async function loadConfig(cwd: string): Promise<ResolvedConfig> {
+export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<ResolvedConfig> {
   const homeConfig = await readConfigFile(getConfigPath("home", cwd));
-  const projectConfig = await readConfigFile(getConfigPath("project", cwd));
+  const projectConfig = isProjectTrusted
+    ? await readConfigFile(getConfigPath("project", cwd))
+    : undefined;
   const envConfig = readEnvConfig();
 
   const merged: PiCodexSearchConfig = {
