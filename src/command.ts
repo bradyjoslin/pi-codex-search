@@ -220,6 +220,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     let list: SettingsList;
 
     const refreshDisplays = () => {
+      scopeItem.description = formatScopeDescription(scope, ctx.cwd);
       for (const f of CYCLE_FIELDS) list.updateValue(f.id, f.get(drafts[scope]));
       for (const f of TEXT_FIELDS) list.updateValue(f.id, textDisplay(f, drafts[scope]));
     };
@@ -254,14 +255,16 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       }
     };
 
+    const scopeItem: SettingItem = {
+      id: "scope",
+      label: "Config scope",
+      description: formatScopeDescription(scope, ctx.cwd),
+      currentValue: scope,
+      values: ["project", "home"],
+    };
+
     const items: SettingItem[] = [
-      {
-        id: "scope",
-        label: "Config scope",
-        description: "Which config file these edits write to",
-        currentValue: scope,
-        values: ["project", "home"],
-      },
+      scopeItem,
       ...CYCLE_FIELDS.map(
         (f): SettingItem => ({
           id: f.id,
@@ -421,6 +424,12 @@ function describeSource(config: PiCodexSearchConfig | undefined): string {
   const keys = Object.keys(config);
   if (keys.length === 0) return "(empty)";
   return keys.sort().join(", ");
+}
+
+function formatScopeDescription(scope: ConfigScope, cwd: string): string {
+  const filePath = getConfigPath(scope, cwd);
+  const displayPath = scope === "home" ? homeRelative(filePath) : relative(cwd, filePath);
+  return `Writes to the ${scope} config file: ${displayPath}`;
 }
 
 function homeRelative(filePath: string): string {
