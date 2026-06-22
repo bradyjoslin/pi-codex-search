@@ -309,11 +309,13 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
               ? "No models loaded from /codex/models (default = auto-select)"
               : `Pick from ${loaded.length} model${loaded.length === 1 ? "" : "s"} loaded via /codex/models (default = auto-select)`;
         }
+        list.invalidate();
       })
       .catch((error: unknown) => {
         if (modelItem) {
           modelItem.description = "Could not load models from /codex/models (default = auto-select)";
         }
+        list.invalidate();
         ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
       });
 
