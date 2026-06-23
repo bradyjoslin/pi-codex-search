@@ -506,6 +506,41 @@ describe("codex helpers", () => {
     assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, true);
   });
 
+  it("summarizes Cloudflare challenge HTML errors", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        '<html><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></html>',
+        {
+          status: 403,
+          headers: { "content-type": "text/html" },
+        },
+      );
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "q" }],
+        freshness: "live",
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.match(error.message, /Cloudflare challenge blocked/);
+        assert.doesNotMatch(error.message, /<html>/);
+        return true;
+      },
+    );
+  });
+
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });

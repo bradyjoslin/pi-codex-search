@@ -1,4 +1,4 @@
-import { CodexError, classifyHttpStatus } from "../errors.ts";
+import { CodexError, classifyHttpStatus, formatHttpErrorBody } from "../errors.ts";
 import type { CodexTransport } from "../transport.ts";
 import type {
   CodexWebSearchResult,
@@ -204,7 +204,7 @@ export async function runStandaloneCommands(
 
   if (!response.ok) {
     const status = response.status;
-    const text = await response.text();
+    const text = formatHttpErrorBody(await response.text());
     throw new CodexError(
       classifyHttpStatus(status),
       `Codex standalone search request failed: HTTP ${status}: ${text}`,

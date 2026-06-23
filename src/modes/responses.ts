@@ -1,4 +1,9 @@
-import { CodexError, classifyEventErrorMessage, classifyHttpStatus } from "../errors.ts";
+import {
+  CodexError,
+  classifyEventErrorMessage,
+  classifyHttpStatus,
+  formatHttpErrorBody,
+} from "../errors.ts";
 import type { CodexTransport } from "../transport.ts";
 import type {
   CodexWebSearchResult,
@@ -130,7 +135,7 @@ export async function runResponsesSearch(
 
   if (!response.ok) {
     const status = response.status;
-    const text = await response.text();
+    const text = formatHttpErrorBody(await response.text());
     throw new CodexError(
       classifyHttpStatus(status),
       `Codex responses request failed: HTTP ${status}: ${text}`,

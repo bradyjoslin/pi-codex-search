@@ -26,6 +26,22 @@ export function classifyHttpStatus(status: number): CodexErrorKind {
   return "transport";
 }
 
+export function formatHttpErrorBody(text: string): string {
+  if (isCloudflareChallenge(text)) {
+    return 'Cloudflare challenge blocked the Codex request. Switch searchApi to "responses" or retry after Codex/ChatGPT has refreshed its Cloudflare clearance.';
+  }
+  return text;
+}
+
+function isCloudflareChallenge(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("/cdn-cgi/challenge-platform/") ||
+    lower.includes("cf_chl_") ||
+    lower.includes("enable javascript and cookies to continue")
+  );
+}
+
 export function classifyEventErrorMessage(message: string): CodexErrorKind {
   const lower = message.toLowerCase();
   if (/rate[- ]?limit|too many requests|quota|429/.test(lower)) return "rate_limit";
