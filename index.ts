@@ -54,6 +54,7 @@ interface WebSearchDetails {
   freshness: Freshness;
   searchContextSize: SearchContextSize;
   queryCount: number;
+  queries: string[];
   failedQueryCount: number;
   successes: QuerySuccess[];
   failures: QueryFailure[];
@@ -134,6 +135,7 @@ function buildTool(config: ResolvedConfig) {
             freshness,
             searchContextSize,
             queryCount: total,
+            queries,
             failedQueryCount: 0,
             successes: [],
             failures: [],
@@ -222,6 +224,7 @@ function buildTool(config: ResolvedConfig) {
           freshness,
           searchContextSize,
           queryCount: total,
+          queries,
           failedQueryCount: failures.length,
           successes,
           failures,
@@ -239,7 +242,7 @@ function buildTool(config: ResolvedConfig) {
       if (queries.length === 1) {
         text += theme.fg("accent", formatInline(queries[0] ?? "", 90));
       } else {
-        text += theme.fg("accent", `${queries.length} queries`);
+        text += theme.fg("accent", formatInline(formatQueriesInline(queries), 140));
       }
       text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
       return new Text(text, 0, 0);
@@ -444,16 +447,39 @@ function renderPartial(details: WebSearchDetails | undefined, theme: Theme): str
 }
 
 function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string {
+  const lines: string[] = [];
+  const queriesPreview = renderQueriesPreview(details.queries, theme);
+  if (queriesPreview) lines.push(queriesPreview);
+
   const firstSuccess = details.successes[0];
   if (firstSuccess) {
     const snippet = formatInline(firstSuccess.text, 110);
-    if (snippet) return theme.fg("dim", snippet);
+    if (snippet) lines.push(theme.fg("dim", snippet));
   }
   const firstFailure = details.failures[0];
   if (firstFailure) {
-    return theme.fg("dim", formatInline(firstFailure.message, 110));
+    lines.push(theme.fg("dim", formatInline(firstFailure.message, 110)));
   }
-  return "";
+  return lines.join("\n");
+}
+
+function renderQueriesPreview(queries: string[], theme: Theme): string {
+  if (queries.length === 0) return "";
+  if (queries.length === 1) {
+    return theme.fg("accent", `Query: ${formatInline(queries[0], 120)}`);
+  }
+  return [
+    theme.fg("accent", "Queries:"),
+    ...queries.map((query, index) =>
+      theme.fg("dim", `  ${index + 1}. ${formatInline(query, 110)}`),
+    ),
+  ].join("\n");
+}
+
+function formatQueriesInline(queries: unknown[]): string {
+  return `${queries.length} queries: ${queries
+    .map((query, index) => `${index + 1}. ${formatInline(query, 70)}`)
+    .join("; ")}`;
 }
 
 function formatInline(value: unknown, maxLength = 90): string {
