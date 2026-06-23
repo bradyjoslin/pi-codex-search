@@ -524,11 +524,6 @@ function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string
   const queriesPreview = renderQueriesPreview(details.queries, theme);
   if (queriesPreview) lines.push(queriesPreview);
 
-  const firstSuccess = details.successes[0];
-  if (firstSuccess) {
-    const snippet = formatInline(firstSuccess.text, 110);
-    if (snippet) lines.push(theme.fg("dim", snippet));
-  }
   const firstFailure = details.failures[0];
   if (firstFailure) {
     lines.push(theme.fg("dim", formatInline(firstFailure.message, 110)));
