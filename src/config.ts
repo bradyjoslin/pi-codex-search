@@ -1,7 +1,9 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { SearchApi, SearchContextSize } from "./codex.ts";
+import type { SearchContextSize } from "./codex.ts";
+
+export type SearchApi = "standalone" | "responses";
 
 export type Freshness = "live" | "cached" | "indexed";
 

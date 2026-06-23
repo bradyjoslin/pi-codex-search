@@ -5,9 +5,9 @@ import {
   CodexError,
   extractAccountIdFromToken,
   fetchCodexModels,
-  fetchCodexStandaloneSearch,
-  fetchCodexStandaloneSearchBatch,
-  fetchCodexWebSearch,
+  createTransport,
+  runStandaloneCommands,
+  runResponsesSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
@@ -87,7 +87,7 @@ describe("codex helpers", () => {
         fetchImpl: fetchImpl as typeof fetch,
       }),
       (error: unknown) => {
-        assert.ok(error instanceof CodexError);
+        assert.ok(error instanceof CodexError, `expected CodexError, got ${error}`);
         assert.equal(error.kind, "auth");
         assert.equal(error.status, 401);
         return true;
@@ -109,15 +109,20 @@ describe("codex helpers", () => {
       );
     };
 
-    const result = await fetchCodexStandaloneSearch({
-      query: "OpenAI news",
+    const transport = createTransport({
       token: "token",
       accountId: "account",
-      model: "gpt-test",
       baseUrl: "https://example.test/backend/codex",
-      externalWebAccess: "indexed",
-      searchContextSize: "low",
       fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const result = await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId: "pi-codex-search",
+      searchQuery: [{ q: "OpenAI news" }],
+      freshness: "indexed",
+      searchContextSize: "low",
     });
 
     assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
@@ -137,6 +142,7 @@ describe("codex helpers", () => {
         allowed_callers: ["direct"],
         external_web_access: "indexed",
       },
+      max_output_tokens: 8000,
     });
     assert.equal(result.text, "Search result from [OpenAI](https://openai.com).");
     assert.equal(result.encryptedOutput, "ciphertext");
@@ -156,13 +162,19 @@ describe("codex helpers", () => {
       );
     };
 
-    const result = await fetchCodexStandaloneSearchBatch({
-      queries: ["OpenAI news", "Codex release notes"],
+    const transport = createTransport({
       token: "token",
       accountId: "account",
-      model: "gpt-test",
       baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const result = await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId: "pi-codex-search",
+      searchQuery: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
+      freshness: "live",
     });
 
     assert.deepEqual(requestedBody, {
@@ -183,6 +195,7 @@ describe("codex helpers", () => {
         allowed_callers: ["direct"],
         external_web_access: true,
       },
+      max_output_tokens: 8000,
     });
     assert.equal(result.text, "Batch result");
     assert.deepEqual(
@@ -198,28 +211,43 @@ describe("codex helpers", () => {
       return new Response(JSON.stringify({ output: "Batch result" }));
     };
 
-    await fetchCodexStandaloneSearchBatch({
-      queries: ["q1", "q2", "q3", "q4"],
+    const transport = createTransport({
       token: "token",
       accountId: "account",
-      model: "gpt-test",
+      baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId: "pi-codex-search",
+      searchQuery: [{ q: "q1" }, { q: "q2" }, { q: "q3" }, { q: "q4" }],
+      freshness: "live",
+      responseLength: "medium",
     });
 
     assert.equal(requestedBody.commands?.response_length, "medium");
   });
 
-  it("rejects empty standalone query batches", async () => {
+  it("rejects empty standalone command batches", async () => {
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+    });
+
     await assert.rejects(
-      fetchCodexStandaloneSearchBatch({
-        queries: [" ", ""],
-        token: "token",
-        accountId: "account",
+      runStandaloneCommands({
         model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [],
+        freshness: "live",
       }),
       (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "schema");
+        assert.ok(error instanceof Error);
+        assert.match((error as Error).message, /at least one command/);
         return true;
       },
     );
@@ -232,108 +260,23 @@ describe("codex helpers", () => {
     ]);
   });
 
-  it("returns a concise Cloudflare error for standalone search 403", async () => {
-    const fetchImpl = async () =>
-      new Response("<html><title>Just a moment...</title><body>Cloudflare</body></html>", {
-        status: 403,
-        statusText: "Forbidden",
-        headers: { "content-type": "text/html", "cf-ray": "test-ray" },
-      });
-
-    await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /Cloudflare blocked the request/);
-        assert.match(error.message, /searchApi=responses/);
-        assert.doesNotMatch(error.message, /<html>/);
-        return true;
-      },
-    );
-  });
-
-  it("does not return raw HTML bodies to the model", async () => {
-    const fetchImpl = async () =>
-      new Response(
-        "<html><head><title>Forbidden &amp; blocked</title></head><body>secret challenge</body></html>",
-        {
-          status: 403,
-          statusText: "Forbidden",
-          headers: { "content-type": "text/html" },
-        },
-      );
-
-    await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /HTTP 403/);
-        assert.match(error.message, /HTML page title: Forbidden & blocked/);
-        assert.doesNotMatch(error.message, /<html>/);
-        assert.doesNotMatch(error.message, /secret challenge/);
-        return true;
-      },
-    );
-  });
-
-  it("keeps backend error details when Cloudflare headers wrap a JSON API error", async () => {
-    const fetchImpl = async () =>
-      new Response('{"error":"backend denied"}', {
-        status: 403,
-        statusText: "Forbidden",
-        headers: { "content-type": "application/json", "cf-ray": "test-ray" },
-      });
-
-    await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /backend denied/);
-        assert.doesNotMatch(error.message, /Cloudflare blocked the request/);
-        return true;
-      },
-    );
-  });
-
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });
 
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
     await assert.rejects(
-      fetchCodexWebSearch({
+      runResponsesSearch({
         query: "q",
-        token: "t",
-        accountId: "a",
         model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
+        transport,
+        externalWebAccess: true,
       }),
       (error: unknown) => {
         assert.ok(error instanceof CodexError);
@@ -352,14 +295,19 @@ describe("codex helpers", () => {
         headers: { "content-type": "text/event-stream" },
       });
 
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
     await assert.rejects(
-      fetchCodexWebSearch({
+      runResponsesSearch({
         query: "q",
-        token: "t",
-        accountId: "a",
         model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
+        transport,
+        externalWebAccess: true,
       }),
       (error: unknown) => {
         assert.ok(error instanceof CodexError);

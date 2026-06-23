@@ -5,19 +5,25 @@ import {
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { Static } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import {
   classifyError,
+  CodexError,
+  createRefStore,
+  createTransport,
+  extractAccountIdFromToken,
+  fetchCodexModels,
+  runResponsesSearch,
+  runStandaloneCommands,
+  selectDefaultModel,
   type CodexCitation,
   type CodexErrorKind,
   type CodexSearchCall,
-  extractAccountIdFromToken,
-  fetchCodexModels,
-  fetchCodexStandaloneSearchBatch,
-  fetchCodexWebSearch,
-  selectDefaultModel,
+  type FindCommand,
+  type OpenCommand,
   type SearchContextSize,
-  type StandaloneExternalWebAccess,
+  type StandaloneCommandsOptions,
 } from "./src/codex.ts";
 import { registerSettingsCommand } from "./src/command.ts";
 import { type Freshness, loadConfig, type ResolvedConfig } from "./src/config.ts";
@@ -64,12 +70,130 @@ interface WebSearchDetails {
   total?: number;
 }
 
+function buildToolDescription(config: ResolvedConfig): string {
+  const toolName = config.toolName;
+  if (config.searchApi === "standalone") {
+    return `${toolName}: search the web, open/fetch webpages, and look up live information (finance, weather, sports, time, images) using the configured ChatGPT Codex subscription.`;
+  }
+  return `${toolName}: search the web using the configured ChatGPT Codex subscription. Web content lookup requires switching searchApi to "standalone" in settings.`;
+}
+
+const SearchParametersSchema = Type.Object({
+  queries: Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+    maxItems: 5,
+    description: "One or more search queries to run in parallel (max 5).",
+  }),
+  search_context_size: Type.Optional(
+    StringEnum(["low", "medium", "high"] as const, {
+      description: "Amount of web context to retrieve. Defaults to medium.",
+    }),
+  ),
+  freshness: Type.Optional(
+    StringEnum(["cached", "indexed", "live"] as const, {
+      description:
+        "Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to live.",
+    }),
+  ),
+});
+
+type SearchParameters = Static<typeof SearchParametersSchema>;
+
+const StandaloneParametersSchema = Type.Object({
+  queries: Type.Array(Type.String({ minLength: 1 }), {
+    minItems: 1,
+    maxItems: 4,
+    description: "One or more search queries to run in parallel (max 4 in standalone mode).",
+  }),
+  search_context_size: Type.Optional(
+    StringEnum(["low", "medium", "high"] as const, {
+      description: "Amount of web context to retrieve. Defaults to medium.",
+    }),
+  ),
+  freshness: Type.Optional(
+    StringEnum(["cached", "indexed", "live"] as const, {
+      description:
+        "Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to live.",
+    }),
+  ),
+  urls: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      description: "URLs to open/fetch directly.",
+    }),
+  ),
+  find: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String({ minLength: 1 }),
+        pattern: Type.String({ minLength: 1 }),
+      }),
+      { description: "Find a pattern within a webpage." },
+    ),
+  ),
+  finance: Type.Optional(
+    Type.Array(
+      Type.Object({
+        ticker: Type.String({ minLength: 1 }),
+        type: StringEnum(["equity", "fund", "crypto", "index"] as const),
+        market: Type.Optional(Type.String()),
+      }),
+      { description: "Look up stock/ETF/crypto/index prices." },
+    ),
+  ),
+  weather: Type.Optional(
+    Type.Array(
+      Type.Object({
+        location: Type.String({ minLength: 1 }),
+        start: Type.Optional(Type.String()),
+        duration: Type.Optional(Type.Number()),
+      }),
+      { description: "Look up weather forecasts." },
+    ),
+  ),
+  sports: Type.Optional(
+    Type.Array(
+      Type.Object({
+        fn: StringEnum(["schedule", "standings"] as const),
+        league: Type.String({ minLength: 1 }),
+        team: Type.Optional(Type.String()),
+        opponent: Type.Optional(Type.String()),
+        date_from: Type.Optional(Type.String()),
+        date_to: Type.Optional(Type.String()),
+        num_games: Type.Optional(Type.Number()),
+        locale: Type.Optional(Type.String()),
+      }),
+      { description: "Look up sports schedules and standings." },
+    ),
+  ),
+  time: Type.Optional(
+    Type.Array(
+      Type.Object({
+        utc_offset: Type.String({ minLength: 1 }),
+      }),
+      { description: "Get time for UTC offsets." },
+    ),
+  ),
+  image_queries: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      description: "Image search queries.",
+    }),
+  ),
+});
+
+type StandaloneParameters = Static<typeof StandaloneParametersSchema>;
+
+type ToolParameters = SearchParameters &
+  Partial<Omit<StandaloneParameters, "queries" | "search_context_size" | "freshness">>;
+
+function buildToolParameters(config: ResolvedConfig) {
+  return config.searchApi === "standalone" ? StandaloneParametersSchema : SearchParametersSchema;
+}
+
 function buildTool(config: ResolvedConfig) {
   return defineTool({
     name: config.toolName,
     label: "Codex Search",
-    description:
-      "Search the web using the user's configured ChatGPT Codex subscription. Accepts one or more queries in a single call; results are returned grouped by query with sources.",
+    description: buildToolDescription(config),
     promptSnippet: `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
@@ -77,51 +201,156 @@ function buildTool(config: ResolvedConfig) {
       "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
-    parameters: Type.Object({
-      queries: Type.Array(Type.String({ minLength: 1 }), {
-        minItems: 1,
-        maxItems: config.batchSize,
-        description: `One or more search queries to run in parallel (max ${config.batchSize}).`,
-      }),
-      search_context_size: Type.Optional(
-        StringEnum(["low", "medium", "high"] as const, {
-          description: `Amount of web context to retrieve. Defaults to ${config.defaultSearchContextSize}.`,
-        }),
-      ),
-      freshness: Type.Optional(
-        StringEnum(["cached", "indexed", "live"] as const, {
-          description: `Use 'live' for time-sensitive queries; 'indexed' for OpenAI-indexed web access; 'cached' for stable topics. Defaults to ${config.defaultFreshness}.`,
-        }),
-      ),
-    }),
+    parameters: buildToolParameters(config),
 
-    async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const queries = params.queries.map((q) => q.trim()).filter((q) => q.length > 0);
-      if (queries.length === 0) {
-        throw new Error("queries must contain at least one non-empty entry");
+    async execute(_toolCallId, params: ToolParameters, signal, onUpdate, ctx) {
+      const queries = params.queries?.map((q) => q.trim()).filter((q) => q.length > 0) ?? [];
+      const imageQueries =
+        params.image_queries?.map((q) => q.trim()).filter((q) => q.length > 0) ?? [];
+      const urls = params.urls?.map((u) => u.trim()).filter((u) => u.length > 0) ?? [];
+      const findCommands = params.find?.filter((c) => c.url.trim() && c.pattern.trim()) ?? [];
+      const financeCommands = params.finance ?? [];
+      const weatherCommands = params.weather ?? [];
+      const sportsCommands = params.sports ?? [];
+      const timeCommands = params.time?.map((c) => ({ utc_offset: c.utc_offset })) ?? [];
+
+      if (
+        queries.length === 0 &&
+        imageQueries.length === 0 &&
+        urls.length === 0 &&
+        findCommands.length === 0 &&
+        financeCommands.length === 0 &&
+        weatherCommands.length === 0 &&
+        sportsCommands.length === 0 &&
+        timeCommands.length === 0
+      ) {
+        throw new CodexError(
+          "schema",
+          "At least one query, url, image query, or lookup command is required",
+        );
       }
 
       const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
       if (!token) {
-        const err = new Error(
+        const err = new CodexError(
+          "auth",
           "OpenAI Codex subscription is not configured. Run `/login openai-codex` and choose ChatGPT Plus/Pro.",
         );
-        (err as Error & { kind?: CodexErrorKind }).kind = "auth";
         throw err;
       }
 
       const accountId = getConfiguredAccountId(ctx, token);
       if (!accountId) {
-        const err = new Error(
+        throw new CodexError(
+          "auth",
           "OpenAI Codex account id was not found in stored credentials or access token. Re-run `/login openai-codex`.",
         );
-        (err as Error & { kind?: CodexErrorKind }).kind = "auth";
-        throw err;
       }
 
       const model = await resolveSearchModel(ctx, token, accountId, config, signal);
       const freshness = params.freshness ?? config.defaultFreshness;
       const searchContextSize = params.search_context_size ?? config.defaultSearchContextSize;
+
+      const transport = createTransport({
+        token,
+        accountId,
+        baseUrl: config.baseUrl,
+      });
+
+      if (config.searchApi === "standalone") {
+        const refStore = createRefStore();
+        const sessionDir = ctx.sessionManager.getSessionDir();
+        await refStore.load(sessionDir);
+
+        const resolvedUrls = await Promise.all(
+          urls.map(async (url) => {
+            const refId = refStore.resolveRefId(url) ?? url;
+            return { url, refId };
+          }),
+        );
+        const resolvedFind = await Promise.all(
+          findCommands.map(async (c: { url: string; pattern: string }) => {
+            const refId = refStore.resolveRefId(c.url) ?? c.url;
+            return { url: c.url, refId, pattern: c.pattern };
+          }),
+        );
+
+        const openCommands: OpenCommand[] = resolvedUrls.map((u) => ({ refId: u.refId }));
+        const findCmds: FindCommand[] = resolvedFind.map((c) => ({
+          refId: c.refId,
+          pattern: c.pattern,
+        }));
+
+        const options: StandaloneCommandsOptions = {
+          model,
+          transport,
+          sessionId: ctx.sessionManager.getSessionId(),
+          searchQuery: queries.map((q) => ({ q })),
+          imageQuery: imageQueries.map((q) => ({ q })),
+          open: openCommands,
+          find: findCmds,
+          finance: financeCommands,
+          weather: weatherCommands,
+          sports: sportsCommands,
+          time: timeCommands,
+          freshness,
+          searchContextSize,
+          responseLength: queries.length > 3 ? "medium" : undefined,
+          maxOutputTokens: 8000,
+          signal,
+        };
+
+        try {
+          const result = await runStandaloneCommands(options);
+
+          for (const [refId] of Object.entries(result.refIds ?? {})) {
+            const url = resolvedUrls.find((u) => u.refId === refId || refId.includes(u.url))?.url;
+            if (url) await refStore.remember(url, refId);
+          }
+
+          const success: QuerySuccess = {
+            query: formatBatchQuery(queries.length > 0 ? queries : urls),
+            text: result.text,
+            citations: result.citations,
+            searchCalls: result.searchCalls,
+          };
+          if (result.usage) success.usage = result.usage;
+
+          return {
+            content: [{ type: "text", text: formatToolText([success], []) }],
+            details: buildDetails(config, model, freshness, searchContextSize, [success], []),
+          };
+        } catch (error) {
+          const kind = classifyError(error);
+          const message = error instanceof Error ? error.message : String(error);
+          const failure: QueryFailure = {
+            query: formatBatchQuery(queries.length > 0 ? queries : urls),
+            kind,
+            message,
+          };
+          const err = new CodexError(kind, message) as CodexError & {
+            failures?: QueryFailure[];
+          };
+          err.failures = [failure];
+          throw err;
+        }
+      }
+
+      // Responses API path: only search queries are supported.
+      if (
+        urls.length > 0 ||
+        findCommands.length > 0 ||
+        imageQueries.length > 0 ||
+        financeCommands.length > 0 ||
+        weatherCommands.length > 0 ||
+        sportsCommands.length > 0 ||
+        timeCommands.length > 0
+      ) {
+        throw new CodexError(
+          "schema",
+          `Open webpage, image search, and domain lookups require searchApi="standalone". Current mode is "responses".`,
+        );
+      }
 
       const total = queries.length;
       let completed = 0;
@@ -130,87 +359,18 @@ function buildTool(config: ResolvedConfig) {
       const emitPartial = (partialText: string) => {
         onUpdate?.({
           content: [{ type: "text", text: partialText }],
-          details: {
-            model,
-            api: config.searchApi,
-            freshness,
-            searchContextSize,
-            queryCount: total,
-            queries,
-            failedQueryCount: 0,
-            successes: [],
-            failures: [],
+          details: buildDetails(config, model, freshness, searchContextSize, [], [], {
             partial: true,
             completed,
             total,
-          } satisfies WebSearchDetails,
+          }),
         });
       };
 
       if (total > 1) emitPartial(formatProgress(completed, total));
 
-      if (config.searchApi === "standalone") {
-        try {
-          const result = await runStandaloneSearchBatch({
-            queries,
-            token,
-            accountId,
-            model,
-            freshness,
-            searchContextSize,
-            config,
-            signal,
-          });
-          completed = total;
-          if (total > 1) emitPartial(formatProgress(completed, total));
-
-          const successes: QuerySuccess[] = [
-            {
-              query: formatBatchQuery(queries),
-              text: result.text,
-              citations: result.citations,
-              searchCalls: result.searchCalls,
-            },
-          ];
-          if (result.responseId !== undefined) successes[0].responseId = result.responseId;
-          if (result.usage !== undefined) successes[0].usage = result.usage;
-
-          return {
-            content: [{ type: "text", text: formatToolText(successes, []) }],
-            details: {
-              model,
-              api: config.searchApi,
-              freshness,
-              searchContextSize,
-              queryCount: total,
-              queries,
-              failedQueryCount: 0,
-              successes,
-              failures: [],
-            } satisfies WebSearchDetails,
-          };
-        } catch (error) {
-          const kind = classifyError(error);
-          const message = error instanceof Error ? error.message : String(error);
-          const failures = queries.map((query) => ({ query, kind, message }));
-          const summary =
-            failures.length === 1
-              ? message
-              : `All ${failures.length} ${config.toolName} queries failed: ${failures
-                  .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
-                  .join("; ")}`;
-          const err = new Error(summary) as Error & {
-            kind?: CodexErrorKind;
-            failures?: QueryFailure[];
-          };
-          err.kind = kind;
-          err.failures = failures;
-          throw err;
-        }
-      }
-
       const settled = await Promise.allSettled(
-        queries.map(async (query) => {
+        queries.map(async (query: string) => {
           const onTextDelta =
             total === 1
               ? (delta: string) => {
@@ -219,14 +379,15 @@ function buildTool(config: ResolvedConfig) {
                 }
               : undefined;
           try {
-            return await runCodexSearch({
+            return await runResponsesSearch({
               query,
-              token,
-              accountId,
               model,
-              freshness,
+              transport,
+              externalWebAccess: freshness !== "cached",
+              indexGatedWebAccess: freshness === "indexed",
               searchContextSize,
-              config,
+              sessionId: ctx.sessionManager.getSessionId(),
+              threadId: ctx.sessionManager.getSessionId(),
               signal,
               onTextDelta,
             });
@@ -253,9 +414,9 @@ function buildTool(config: ResolvedConfig) {
           if (outcome.value.usage !== undefined) success.usage = outcome.value.usage;
           successes.push(success);
         } else {
-          const kind = classifyError(outcome.reason);
-          const message =
-            outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
+          const reason = outcome.reason;
+          const kind = classifyError(reason);
+          const message = reason instanceof Error ? reason.message : String(reason);
           failures.push({ query, kind, message });
         }
       });
@@ -268,28 +429,16 @@ function buildTool(config: ResolvedConfig) {
             : `All ${failures.length} ${config.toolName} queries failed: ${failures
                 .map((f, i) => `${i + 1}. [${f.kind}] ${f.message}`)
                 .join("; ")}`;
-        const err = new Error(summary) as Error & {
-          kind?: CodexErrorKind;
+        const err = new CodexError(primary?.kind ?? "unknown", summary) as CodexError & {
           failures?: QueryFailure[];
         };
-        err.kind = primary?.kind ?? "unknown";
         err.failures = failures;
         throw err;
       }
 
       return {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
-        details: {
-          model,
-          api: config.searchApi,
-          freshness,
-          searchContextSize,
-          queryCount: total,
-          queries,
-          failedQueryCount: failures.length,
-          successes,
-          failures,
-        } satisfies WebSearchDetails,
+        details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
       };
     },
 
@@ -405,75 +554,42 @@ async function resolveSearchModel(
   if (config.model) return config.model;
   if (ctx.model?.provider === OPENAI_CODEX_PROVIDER) return ctx.model.id;
 
-  const fetchOpts: Parameters<typeof fetchCodexModels>[0] = {
+  const models = await fetchCodexModels({
     token,
     accountId,
-  };
-  if (config.baseUrl !== undefined) fetchOpts.baseUrl = config.baseUrl;
-  if (config.clientVersion !== undefined) fetchOpts.clientVersion = config.clientVersion;
-  if (signal) fetchOpts.signal = signal;
-
-  const models = await fetchCodexModels(fetchOpts);
+    baseUrl: config.baseUrl,
+    clientVersion: config.clientVersion,
+    signal,
+  });
   const model = selectDefaultModel(models);
   if (!model) {
-    throw new Error("Codex model list is empty.");
+    throw new CodexError("unknown", "Codex model list is empty.");
   }
   return model;
 }
 
-async function runCodexSearch(options: {
-  query: string;
-  token: string;
-  accountId: string;
-  model: string;
-  freshness: Freshness;
-  searchContextSize: SearchContextSize;
-  config: ResolvedConfig;
-  signal: AbortSignal | undefined;
-  onTextDelta: ((delta: string) => void) | undefined;
-}) {
-  const fetchOpts: Parameters<typeof fetchCodexWebSearch>[0] = {
-    query: options.query,
-    token: options.token,
-    accountId: options.accountId,
-    model: options.model,
-    externalWebAccess: options.freshness !== "cached",
-    searchContextSize: options.searchContextSize,
+function buildDetails(
+  config: ResolvedConfig,
+  model: string,
+  freshness: Freshness,
+  searchContextSize: SearchContextSize,
+  successes: QuerySuccess[],
+  failures: QueryFailure[],
+  extra?: { partial?: boolean; completed?: number; total?: number },
+): WebSearchDetails {
+  const queries = successes.map((s) => s.query).concat(failures.map((f) => f.query));
+  return {
+    model,
+    api: config.searchApi,
+    freshness,
+    searchContextSize,
+    queryCount: queries.length,
+    queries,
+    failedQueryCount: failures.length,
+    successes,
+    failures,
+    ...extra,
   };
-  if (options.freshness === "indexed") fetchOpts.indexGatedWebAccess = true;
-  if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
-  if (options.signal) fetchOpts.signal = options.signal;
-  if (options.onTextDelta) fetchOpts.onTextDelta = options.onTextDelta;
-  return await fetchCodexWebSearch(fetchOpts);
-}
-
-async function runStandaloneSearchBatch(options: {
-  queries: string[];
-  token: string;
-  accountId: string;
-  model: string;
-  freshness: Freshness;
-  searchContextSize: SearchContextSize;
-  config: ResolvedConfig;
-  signal: AbortSignal | undefined;
-}) {
-  const fetchOpts: Parameters<typeof fetchCodexStandaloneSearchBatch>[0] = {
-    queries: options.queries,
-    token: options.token,
-    accountId: options.accountId,
-    model: options.model,
-    externalWebAccess: standaloneExternalWebAccess(options.freshness),
-    searchContextSize: options.searchContextSize,
-  };
-  if (options.config.baseUrl !== undefined) fetchOpts.baseUrl = options.config.baseUrl;
-  if (options.signal) fetchOpts.signal = options.signal;
-  return await fetchCodexStandaloneSearchBatch(fetchOpts);
-}
-
-function standaloneExternalWebAccess(freshness: Freshness): StandaloneExternalWebAccess {
-  if (freshness === "cached") return false;
-  if (freshness === "indexed") return "indexed";
-  return true;
 }
 
 function formatProgress(completed: number, total: number): string {
@@ -559,8 +675,8 @@ function formatQueriesInline(queries: unknown[]): string {
     .join("; ")}`;
 }
 
-function formatBatchQuery(queries: string[]): string {
-  return queries.length === 1 ? (queries[0] ?? "") : formatQueriesInline(queries);
+function formatBatchQuery(items: string[]): string {
+  return items.length === 1 ? (items[0] ?? "") : formatQueriesInline(items);
 }
 
 function formatInline(value: unknown, maxLength = 90): string {
