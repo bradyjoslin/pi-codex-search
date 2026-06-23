@@ -13,6 +13,7 @@ import {
   resolveCodexSearchEndpoint,
   selectDefaultModel,
 } from "../src/codex.ts";
+import { formatQueryPreviewLines } from "../index.ts";
 
 describe("codex helpers", () => {
   it("normalizes codex base URLs", () => {
@@ -188,6 +189,47 @@ describe("codex helpers", () => {
       result.searchCalls.map((call) => call.query),
       ["OpenAI news", "Codex release notes"],
     );
+  });
+
+  it("sets response_length for standalone batches above three queries", async () => {
+    let requestedBody = {} as { commands?: { response_length?: string } };
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output: "Batch result" }));
+    };
+
+    await fetchCodexStandaloneSearchBatch({
+      queries: ["q1", "q2", "q3", "q4"],
+      token: "token",
+      accountId: "account",
+      model: "gpt-test",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    assert.equal(requestedBody.commands?.response_length, "medium");
+  });
+
+  it("rejects empty standalone query batches", async () => {
+    await assert.rejects(
+      fetchCodexStandaloneSearchBatch({
+        queries: [" ", ""],
+        token: "token",
+        accountId: "account",
+        model: "gpt-test",
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "schema");
+        return true;
+      },
+    );
+  });
+
+  it("formats query preview lines without result snippets", () => {
+    assert.deepEqual(formatQueryPreviewLines(["first query", "second query"]), [
+      "  ⌕ 1. first query",
+      "  ⌕ 2. second query",
+    ]);
   });
 
   it("returns a concise Cloudflare error for standalone search 403", async () => {

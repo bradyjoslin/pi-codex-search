@@ -475,7 +475,7 @@ async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
   notify(ctx, formatStatus(resolved, ctx.cwd));
 }
 
-function formatStatus(resolved: ResolvedConfig, cwd: string): string {
+export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   const lines = ["Codex Search settings:"];
   lines.push(`  enabled             = ${resolved.enabled}`);
   lines.push(`  toolName            = ${resolved.toolName}`);

@@ -540,12 +540,17 @@ function renderQueriesPreview(queries: string[], theme: Theme): string {
 }
 
 function renderCallQueries(queries: unknown[], theme: Theme): string {
-  return queries
+  const iconPrefix = "  ⌕";
+  return formatQueryPreviewLines(queries)
     .map(
-      (query, index) =>
-        `${theme.fg("accent", "  ⌕")} ${theme.fg("dim", `${index + 1}. ${formatInline(query, 110)}`)}`,
+      (line) =>
+        `${theme.fg("accent", iconPrefix)}${theme.fg("dim", line.slice(iconPrefix.length))}`,
     )
     .join("\n");
+}
+
+export function formatQueryPreviewLines(queries: unknown[], maxLength = 110): string[] {
+  return queries.map((query, index) => `  ⌕ ${index + 1}. ${formatInline(query, maxLength)}`);
 }
 
 function formatQueriesInline(queries: unknown[]): string {
