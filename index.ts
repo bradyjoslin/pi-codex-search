@@ -97,14 +97,14 @@ const SearchParametersSchema = Type.Object({
   ),
 });
 
-type SearchParameters = Static<typeof SearchParametersSchema>;
-
 const StandaloneParametersSchema = Type.Object({
-  queries: Type.Array(Type.String({ minLength: 1 }), {
-    minItems: 1,
-    maxItems: 4,
-    description: "One or more search queries to run in parallel (max 4 in standalone mode).",
-  }),
+  queries: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      minItems: 1,
+      maxItems: 4,
+      description: "One or more search queries to run in parallel (max 4 in standalone mode).",
+    }),
+  ),
   search_context_size: Type.Optional(
     StringEnum(["low", "medium", "high"] as const, {
       description: "Amount of web context to retrieve. Defaults to medium.",
@@ -182,8 +182,11 @@ const StandaloneParametersSchema = Type.Object({
 
 type StandaloneParameters = Static<typeof StandaloneParametersSchema>;
 
-type ToolParameters = SearchParameters &
-  Partial<Omit<StandaloneParameters, "queries" | "search_context_size" | "freshness">>;
+type ToolParameters = Partial<StandaloneParameters> & {
+  queries?: string[];
+  search_context_size?: SearchContextSize;
+  freshness?: Freshness;
+};
 
 function buildToolParameters(config: ResolvedConfig) {
   return config.searchApi === "standalone" ? StandaloneParametersSchema : SearchParametersSchema;
@@ -197,7 +200,7 @@ function buildTool(config: ResolvedConfig) {
     promptSnippet: `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
-      `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      `Batch up to ${config.searchApi === "standalone" ? 4 : config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
       "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
@@ -213,6 +216,16 @@ function buildTool(config: ResolvedConfig) {
       const weatherCommands = params.weather ?? [];
       const sportsCommands = params.sports ?? [];
       const timeCommands = params.time?.map((c) => ({ utc_offset: c.utc_offset })) ?? [];
+      const requestLabels = buildRequestLabels({
+        queries,
+        imageQueries,
+        urls,
+        findCommands,
+        financeCommands,
+        weatherCommands,
+        sportsCommands,
+        timeCommands,
+      });
 
       if (
         queries.length === 0 &&
@@ -303,13 +316,14 @@ function buildTool(config: ResolvedConfig) {
         try {
           const result = await runStandaloneCommands(options);
 
-          for (const [refId] of Object.entries(result.refIds ?? {})) {
-            const url = resolvedUrls.find((u) => u.refId === refId || refId.includes(u.url))?.url;
-            if (url) await refStore.remember(url, refId);
+          const extractedRefIds = Object.keys(result.refIds ?? {});
+          for (const [index, resolvedUrl] of resolvedUrls.entries()) {
+            const refId = extractedRefIds[index];
+            if (refId) await refStore.remember(resolvedUrl.url, refId);
           }
 
           const success: QuerySuccess = {
-            query: formatBatchQuery(queries.length > 0 ? queries : urls),
+            query: formatBatchQuery(requestLabels),
             text: result.text,
             citations: result.citations,
             searchCalls: result.searchCalls,
@@ -324,7 +338,7 @@ function buildTool(config: ResolvedConfig) {
           const kind = classifyError(error);
           const message = error instanceof Error ? error.message : String(error);
           const failure: QueryFailure = {
-            query: formatBatchQuery(queries.length > 0 ? queries : urls),
+            query: formatBatchQuery(requestLabels),
             kind,
             message,
           };
@@ -443,20 +457,20 @@ function buildTool(config: ResolvedConfig) {
     },
 
     renderCall(args, theme) {
-      const queries = Array.isArray(args.queries) ? args.queries : [];
       const fresh = (args.freshness as string | undefined) ?? config.defaultFreshness;
       const ctxSize =
         (args.search_context_size as string | undefined) ?? config.defaultSearchContextSize;
+      const labels = buildCallLabels(args);
 
       let text = theme.fg("toolTitle", theme.bold(config.toolName));
-      if (queries.length === 1) {
-        text += ` ${theme.fg("accent", formatInline(queries[0] ?? "", 90))}`;
+      if (labels.length === 1) {
+        text += ` ${theme.fg("accent", formatInline(labels[0] ?? "", 90))}`;
       } else {
-        text += ` ${theme.fg("accent", `${queries.length} queries`)}`;
+        text += ` ${theme.fg("accent", `${labels.length} actions`)}`;
       }
       text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
-      if (queries.length > 1) {
-        text += `\n${renderCallQueries(queries, theme)}`;
+      if (labels.length > 1) {
+        text += `\n${renderCallQueries(labels, theme)}`;
       }
       return new Text(text, 0, 0);
     },
@@ -667,6 +681,99 @@ function renderCallQueries(queries: unknown[], theme: Theme): string {
 
 export function formatQueryPreviewLines(queries: unknown[], maxLength = 110): string[] {
   return queries.map((query, index) => `  ⌕ ${index + 1}. ${formatInline(query, maxLength)}`);
+}
+
+function buildRequestLabels(input: {
+  queries: string[];
+  imageQueries: string[];
+  urls: string[];
+  findCommands: Array<{ url: string; pattern: string }>;
+  financeCommands: Array<{ ticker: string }>;
+  weatherCommands: Array<{ location: string }>;
+  sportsCommands: Array<{ fn: string; league: string; team?: string }>;
+  timeCommands: Array<{ utc_offset: string }>;
+}): string[] {
+  return [
+    ...input.queries,
+    ...input.imageQueries.map((q) => `image: ${q}`),
+    ...input.urls.map((url) => `open: ${url}`),
+    ...input.findCommands.map((c) => `find "${c.pattern}" in ${c.url}`),
+    ...input.financeCommands.map((c) => `finance: ${c.ticker}`),
+    ...input.weatherCommands.map((c) => `weather: ${c.location}`),
+    ...input.sportsCommands.map((c) => `sports: ${c.fn} ${c.league}${c.team ? ` ${c.team}` : ""}`),
+    ...input.timeCommands.map((c) => `time: ${c.utc_offset}`),
+  ];
+}
+
+function buildCallLabels(args: Record<string, unknown>): string[] {
+  return buildRequestLabels({
+    queries: Array.isArray(args.queries) ? args.queries.filter(isString) : [],
+    imageQueries: Array.isArray(args.image_queries) ? args.image_queries.filter(isString) : [],
+    urls: Array.isArray(args.urls) ? args.urls.filter(isString) : [],
+    findCommands: Array.isArray(args.find)
+      ? args.find.filter(isFindArg).map((c) => ({ url: c.url, pattern: c.pattern }))
+      : [],
+    financeCommands: Array.isArray(args.finance)
+      ? args.finance.filter(isFinanceArg).map((c) => ({ ticker: c.ticker }))
+      : [],
+    weatherCommands: Array.isArray(args.weather)
+      ? args.weather.filter(isWeatherArg).map((c) => ({ location: c.location }))
+      : [],
+    sportsCommands: Array.isArray(args.sports)
+      ? args.sports.filter(isSportsArg).map((c) => ({ fn: c.fn, league: c.league, team: c.team }))
+      : [],
+    timeCommands: Array.isArray(args.time)
+      ? args.time.filter(isTimeArg).map((c) => ({ utc_offset: c.utc_offset }))
+      : [],
+  });
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isFindArg(value: unknown): value is { url: string; pattern: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { url?: unknown }).url === "string" &&
+    typeof (value as { pattern?: unknown }).pattern === "string"
+  );
+}
+
+function isFinanceArg(value: unknown): value is { ticker: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { ticker?: unknown }).ticker === "string"
+  );
+}
+
+function isWeatherArg(value: unknown): value is { location: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { location?: unknown }).location === "string"
+  );
+}
+
+function isSportsArg(value: unknown): value is { fn: string; league: string; team?: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { fn?: unknown }).fn === "string" &&
+    typeof (value as { league?: unknown }).league === "string" &&
+    ((value as { team?: unknown }).team === undefined ||
+      typeof (value as { team?: unknown }).team === "string")
+  );
+}
+
+function isTimeArg(value: unknown): value is { utc_offset: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { utc_offset?: unknown }).utc_offset === "string"
+  );
 }
 
 function formatQueriesInline(queries: unknown[]): string {

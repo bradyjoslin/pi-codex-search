@@ -6,6 +6,7 @@ import {
   extractAccountIdFromToken,
   fetchCodexModels,
   createTransport,
+  ChatGptCloudflareCookieStore,
   runStandaloneCommands,
   runResponsesSearch,
   normalizeCodexBaseUrl,
@@ -53,6 +54,32 @@ describe("codex helpers", () => {
       resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/codex/responses"),
       "https://chatgpt.com/backend-api/codex/alpha/search",
     );
+  });
+
+  it("builds Codex-aligned transport headers", () => {
+    const transport = createTransport({ token: "token", accountId: "account" });
+    const headers = transport.buildHeaders("application/json");
+
+    assert.equal(headers.get("originator"), "codex_cli_rs");
+    assert.equal(headers.get("authorization"), "Bearer token");
+    assert.equal(headers.get("chatgpt-account-id"), "account");
+    assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
+  });
+
+  it("stores only Cloudflare cookies for ChatGPT hosts", () => {
+    const store = new ChatGptCloudflareCookieStore();
+    const url = new URL("https://chatgpt.com/backend-api/codex/responses");
+
+    store.setCookies(
+      [
+        "cf_clearance=clearance; Path=/; Secure; HttpOnly",
+        "__Secure-next-auth.session-token=secret; Path=/; Secure; HttpOnly",
+      ],
+      url,
+    );
+
+    assert.equal(store.cookiesForUrl(url), "cf_clearance=clearance");
+    assert.equal(store.cookiesForUrl(new URL("https://api.openai.com/v1/responses")), undefined);
   });
 
   it("extracts account id from an access token JWT", () => {
@@ -149,6 +176,50 @@ describe("codex helpers", () => {
     assert.deepEqual(result.citations, [
       { title: "OpenAI", url: "https://openai.com", startIndex: 19 },
     ]);
+  });
+
+  it("posts standalone web content and lookup commands", async () => {
+    let requestedBody = {} as { commands?: Record<string, unknown> };
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output: "Lookup result turn0fetch0" }));
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const result = await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId: "pi-codex-search",
+      open: [{ refId: "https://example.com/docs" }],
+      find: [{ refId: "https://example.com/docs", pattern: "install" }],
+      finance: [{ ticker: "AMD", type: "equity", market: "USA" }],
+      weather: [{ location: "San Francisco, CA" }],
+      sports: [{ fn: "standings", league: "nba", team: "GSW" }],
+      time: [{ utc_offset: "+03:00" }],
+      imageQuery: [{ q: "waterfalls" }],
+      freshness: "live",
+    });
+
+    assert.deepEqual(requestedBody.commands?.open, [{ ref_id: "https://example.com/docs" }]);
+    assert.deepEqual(requestedBody.commands?.find, [
+      { ref_id: "https://example.com/docs", pattern: "install" },
+    ]);
+    assert.deepEqual(requestedBody.commands?.finance, [
+      { ticker: "AMD", type: "equity", market: "USA" },
+    ]);
+    assert.deepEqual(requestedBody.commands?.weather, [{ location: "San Francisco, CA" }]);
+    assert.deepEqual(requestedBody.commands?.sports, [
+      { fn: "standings", league: "nba", team: "GSW" },
+    ]);
+    assert.deepEqual(requestedBody.commands?.time, [{ utc_offset: "+03:00" }]);
+    assert.deepEqual(requestedBody.commands?.image_query, [{ q: "waterfalls" }]);
+    assert.deepEqual(result.refIds, { turn0fetch0: "turn0fetch0" });
   });
 
   it("batches standalone queries into one /alpha/search request", async () => {
