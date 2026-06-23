@@ -172,6 +172,39 @@ describe("codex helpers", () => {
     );
   });
 
+  it("does not return raw HTML bodies to the model", async () => {
+    const fetchImpl = async () =>
+      new Response(
+        "<html><head><title>Forbidden &amp; blocked</title></head><body>secret challenge</body></html>",
+        {
+          status: 403,
+          statusText: "Forbidden",
+          headers: { "content-type": "text/html" },
+        },
+      );
+
+    await assert.rejects(
+      fetchCodexStandaloneSearch({
+        query: "q",
+        token: "t",
+        accountId: "a",
+        model: "m",
+        baseUrl: "https://example.test/backend",
+        fetchImpl: fetchImpl as typeof fetch,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CodexError);
+        assert.equal(error.kind, "auth");
+        assert.equal(error.status, 403);
+        assert.match(error.message, /HTTP 403/);
+        assert.match(error.message, /HTML page title: Forbidden & blocked/);
+        assert.doesNotMatch(error.message, /<html>/);
+        assert.doesNotMatch(error.message, /secret challenge/);
+        return true;
+      },
+    );
+  });
+
   it("keeps backend error details when Cloudflare headers wrap a JSON API error", async () => {
     const fetchImpl = async () =>
       new Response('{"error":"backend denied"}', {

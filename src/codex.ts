@@ -395,10 +395,16 @@ export async function fetchCodexWebSearch(
 async function formatCodexHttpError(prefix: string, response: Response): Promise<string> {
   const status = response.status;
   const body = await response.text();
-  if (isCloudflareError(response, body)) {
-    return `${prefix} failed: HTTP ${status}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the previous /codex/responses path, then retry.`;
+  const htmlTitle = extractHtmlPageTitle(response, body);
+  if (htmlTitle !== undefined) {
+    if (isCloudflareError(response, body)) {
+      return `${prefix} failed: HTTP ${status}. HTML page title: ${htmlTitle}. Cloudflare blocked the request and returned an HTML challenge/error page instead of a Codex response. Set searchApi=responses to use the /codex/responses path, then retry.`;
+    }
+    return `${prefix} failed: HTTP ${status}. HTML page title: ${htmlTitle}.`;
   }
-  return `${prefix} failed: HTTP ${status} ${body}`;
+
+  const text = body.trim();
+  return text ? `${prefix} failed: HTTP ${status}: ${text}` : `${prefix} failed: HTTP ${status}.`;
 }
 
 function isOpenAiRootBaseUrl(baseUrl: string): boolean {
@@ -410,15 +416,39 @@ function isOpenAiRootBaseUrl(baseUrl: string): boolean {
   }
 }
 
-function isCloudflareError(response: Response, body: string): boolean {
+function extractHtmlPageTitle(response: Response, body: string): string | undefined {
+  if (!isHtmlResponse(response, body)) return undefined;
+  const match = body.match(/<title(?:\s[^>]*)?>([\s\S]*?)<\/title>/i);
+  const title = match
+    ? decodeBasicHtmlEntities(match[1] ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+    : "";
+  return title || "(no title)";
+}
+
+function isHtmlResponse(response: Response, body: string): boolean {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const lowerBody = body.slice(0, 4096).toLowerCase();
-  const isHtml =
-    contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/.test(lowerBody);
-  if (!isHtml) return false;
-  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked/.test(
+  const prefix = body.slice(0, 1024).toLowerCase();
+  return contentType.includes("text/html") || /^\s*(?:<!doctype html|<html[\s>])/.test(prefix);
+}
+
+function isCloudflareError(response: Response, body: string): boolean {
+  if (!isHtmlResponse(response, body)) return false;
+  const lowerBody = body.slice(0, 65536).toLowerCase();
+  return /cloudflare|cf-ray|cf-error|__cf_chl|just a moment|attention required|sorry, you have been blocked|challenge-platform/.test(
     lowerBody,
   );
+}
+
+function decodeBasicHtmlEntities(value: string): string {
+  return value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'");
 }
 
 function buildCodexHeaders(token: string, accountId: string, accept: string): Headers {
