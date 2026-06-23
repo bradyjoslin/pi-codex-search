@@ -44,8 +44,9 @@ async function loadStored(dir: string): Promise<StoredRefs> {
     const raw = await readFile(join(dir, STORE_FILE), "utf-8");
     const parsed = JSON.parse(raw) as StoredRefs;
     return { urlToRefId: parsed.urlToRefId ?? {} };
-  } catch {
-    return { urlToRefId: {} };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { urlToRefId: {} };
+    throw error;
   }
 }
 

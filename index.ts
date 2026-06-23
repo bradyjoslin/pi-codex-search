@@ -136,7 +136,7 @@ const StandaloneParametersSchema = Type.Object({
     Type.Array(
       Type.Object({
         url: Type.String({ minLength: 1 }),
-        id: Type.Number(),
+        id: Type.Integer({ minimum: 0 }),
       }),
       { description: "Follow a link id from a previously opened page." },
     ),
@@ -145,7 +145,7 @@ const StandaloneParametersSchema = Type.Object({
     Type.Array(
       Type.Object({
         url: Type.String({ minLength: 1 }),
-        pageno: Type.Number(),
+        pageno: Type.Integer({ minimum: 0 }),
       }),
       { description: "Capture a screenshot of a previously opened page." },
     ),
@@ -165,7 +165,7 @@ const StandaloneParametersSchema = Type.Object({
       Type.Object({
         location: Type.String({ minLength: 1 }),
         start: Type.Optional(Type.String()),
-        duration: Type.Optional(Type.Number()),
+        duration: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
       { description: "Look up weather forecasts." },
     ),
@@ -174,12 +174,22 @@ const StandaloneParametersSchema = Type.Object({
     Type.Array(
       Type.Object({
         fn: StringEnum(["schedule", "standings"] as const),
-        league: Type.String({ minLength: 1 }),
+        league: StringEnum([
+          "nba",
+          "wnba",
+          "nfl",
+          "nhl",
+          "mlb",
+          "epl",
+          "ncaamb",
+          "ncaawb",
+          "ipl",
+        ] as const),
         team: Type.Optional(Type.String()),
         opponent: Type.Optional(Type.String()),
         date_from: Type.Optional(Type.String()),
         date_to: Type.Optional(Type.String()),
-        num_games: Type.Optional(Type.Number()),
+        num_games: Type.Optional(Type.Integer({ minimum: 0 })),
         locale: Type.Optional(Type.String()),
       }),
       { description: "Look up sports schedules and standings." },
@@ -364,9 +374,11 @@ function buildTool(config: ResolvedConfig) {
         try {
           const result = await runStandaloneCommands(options);
 
-          const extractedRefIds = Object.keys(result.refIds ?? {});
+          const fetchRefIds = Object.keys(result.refIds ?? {}).filter((refId) =>
+            /\bturn\d+fetch\d+\b/.test(refId),
+          );
           for (const [index, resolvedUrl] of resolvedUrls.entries()) {
-            const refId = extractedRefIds[index];
+            const refId = fetchRefIds[index];
             if (refId) await refStore.remember(resolvedUrl.url, refId);
           }
 

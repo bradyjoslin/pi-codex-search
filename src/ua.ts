@@ -23,7 +23,7 @@ function mapArch(arch: string): string {
     case "x64":
       return "x86_64";
     case "arm64":
-      return "aarch64";
+      return "arm64";
     case "arm":
       return "arm";
     default:

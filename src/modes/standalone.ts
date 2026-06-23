@@ -48,9 +48,20 @@ export interface WeatherCommand {
   duration?: number;
 }
 
+export type SportsLeague =
+  | "nba"
+  | "wnba"
+  | "nfl"
+  | "nhl"
+  | "mlb"
+  | "epl"
+  | "ncaamb"
+  | "ncaawb"
+  | "ipl";
+
 export interface SportsCommand {
   fn: "schedule" | "standings";
-  league: string;
+  league: SportsLeague;
   team?: string;
   opponent?: string;
   date_from?: string;

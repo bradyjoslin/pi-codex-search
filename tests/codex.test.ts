@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  buildCodexUserAgent,
   classifyError,
   CodexError,
   extractAccountIdFromToken,
@@ -60,6 +61,12 @@ describe("codex helpers", () => {
     );
   });
 
+  it("formats Codex user agent architecture like upstream", () => {
+    if (process.arch === "arm64") {
+      assert.match(buildCodexUserAgent(), /; arm64\)/);
+    }
+  });
+
   it("builds Codex-aligned transport headers", () => {
     const transport = createTransport({ token: "token", accountId: "account" });
     const headers = transport.buildHeaders("application/json");
@@ -96,6 +103,17 @@ describe("codex helpers", () => {
       const second = createRefStore();
       await second.load(dir);
       assert.equal(second.resolveRefId("https://example.com/docs"), "turn0fetch0");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast on corrupt persisted ref ids", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-bad-"));
+    try {
+      await writeFile(join(dir, "pi-codex-search-refs.json"), "{bad json", "utf-8");
+      const store = createRefStore();
+      await assert.rejects(store.load(dir), SyntaxError);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
