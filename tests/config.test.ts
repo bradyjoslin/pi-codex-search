@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import {
   CONFIG_FILE_NAME,
+  DEFAULT_BATCH_SIZE,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
   DEFAULT_SEARCH_API,
@@ -25,6 +26,7 @@ const ENV_KEYS = [
   "PI_CODEX_WEB_SEARCH_CONTEXT_SIZE",
   "PI_CODEX_WEB_SEARCH_FRESHNESS",
   "PI_CODEX_WEB_SEARCH_API",
+  "PI_CODEX_WEB_SEARCH_BATCH_SIZE",
 ] as const;
 
 describe("config loader", () => {
@@ -64,6 +66,7 @@ describe("config loader", () => {
     assert.equal(resolved.defaultFreshness, DEFAULT_FRESHNESS);
     assert.equal(resolved.defaultSearchContextSize, DEFAULT_SEARCH_CONTEXT_SIZE);
     assert.equal(resolved.searchApi, DEFAULT_SEARCH_API);
+    assert.equal(resolved.batchSize, DEFAULT_BATCH_SIZE);
     assert.equal(resolved.model, undefined);
     assert.deepEqual(resolved.sources, {});
   });
@@ -236,6 +239,32 @@ describe("config loader", () => {
       "utf-8",
     );
     await assert.rejects(loadConfig(cwd), /Invalid searchContextSize/);
+  });
+
+  it("reads batchSize from the project file", async () => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(join(cwd, ".pi", CONFIG_FILE_NAME), JSON.stringify({ batchSize: 10 }), "utf-8");
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.batchSize, 10);
+  });
+
+  it("reads batchSize from env", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_BATCH_SIZE = "8";
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.batchSize, 8);
+  });
+
+  it("rejects an invalid batchSize", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_BATCH_SIZE = "huge";
+    await assert.rejects(loadConfig(cwd), /PI_CODEX_WEB_SEARCH_BATCH_SIZE/);
+  });
+
+  it("rejects a batchSize out of range", async () => {
+    process.env.PI_CODEX_WEB_SEARCH_BATCH_SIZE = "0";
+    await assert.rejects(loadConfig(cwd), /Invalid batchSize/);
+
+    process.env.PI_CODEX_WEB_SEARCH_BATCH_SIZE = "33";
+    await assert.rejects(loadConfig(cwd), /Invalid batchSize/);
   });
 
   it("saveConfig writes a file at the right path and roundtrips through loadConfig", async () => {
