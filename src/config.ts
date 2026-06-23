@@ -16,6 +16,7 @@ export interface PiCodexSearchConfig {
   searchContextSize?: SearchContextSize;
   freshness?: Freshness;
   searchApi?: SearchApi;
+  batchSize?: number;
 }
 
 export interface ResolvedConfig {
@@ -27,6 +28,7 @@ export interface ResolvedConfig {
   defaultSearchContextSize: SearchContextSize;
   defaultFreshness: Freshness;
   searchApi: SearchApi;
+  batchSize: number;
   sources: {
     project?: PiCodexSearchConfig;
     home?: PiCodexSearchConfig;
@@ -39,11 +41,14 @@ export const DEFAULT_TOOL_NAME = "codex_search";
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 export const DEFAULT_FRESHNESS: Freshness = "live";
 export const DEFAULT_SEARCH_API: SearchApi = "responses";
+export const DEFAULT_BATCH_SIZE = 5;
 export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
 const FRESHNESS_VALUES: readonly Freshness[] = ["live", "cached", "indexed"] as const;
 const SEARCH_API_VALUES: readonly SearchApi[] = ["standalone", "responses"] as const;
+export const MIN_BATCH_SIZE = 1;
+export const MAX_BATCH_SIZE = 32;
 
 export function getConfigPath(scope: ConfigScope, cwd: string): string {
   if (scope === "project") return join(cwd, ".pi", CONFIG_FILE_NAME);
@@ -69,6 +74,7 @@ export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<
     defaultSearchContextSize: merged.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE,
     defaultFreshness: merged.freshness ?? DEFAULT_FRESHNESS,
     searchApi: merged.searchApi ?? DEFAULT_SEARCH_API,
+    batchSize: merged.batchSize ?? DEFAULT_BATCH_SIZE,
     sources: {},
   };
   if (merged.model !== undefined) resolved.model = merged.model;
@@ -147,6 +153,8 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   if (freshness !== undefined) env.freshness = freshness as Freshness;
   const searchApi = trimmedEnv("PI_CODEX_WEB_SEARCH_API");
   if (searchApi !== undefined) env.searchApi = searchApi as SearchApi;
+  const batchSize = integerEnv("PI_CODEX_WEB_SEARCH_BATCH_SIZE");
+  if (batchSize !== undefined) env.batchSize = batchSize;
 
   if (Object.keys(env).length === 0) return undefined;
   validateConfig(env, "<env>");
@@ -192,6 +200,18 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
         `Expected one of ${SEARCH_API_VALUES.join(", ")}.`,
     );
   }
+  if (config.batchSize !== undefined) {
+    if (
+      !Number.isInteger(config.batchSize) ||
+      config.batchSize < MIN_BATCH_SIZE ||
+      config.batchSize > MAX_BATCH_SIZE
+    ) {
+      throw new Error(
+        `Invalid batchSize in ${sourceLabel}: ${JSON.stringify(config.batchSize)}. ` +
+          `Expected an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
+      );
+    }
+  }
 }
 
 function trimmedEnv(name: string): string | undefined {
@@ -208,6 +228,16 @@ function booleanEnv(name: string): boolean | undefined {
   if (lower === "true") return true;
   if (lower === "false") return false;
   throw new Error(`Invalid ${name}: ${JSON.stringify(raw)}. Expected 'true' or 'false'.`);
+}
+
+function integerEnv(name: string): number | undefined {
+  const raw = trimmedEnv(name);
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`Invalid ${name}: ${JSON.stringify(raw)}. Expected an integer.`);
+  }
+  return parsed;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

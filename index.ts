@@ -23,7 +23,6 @@ import { registerSettingsCommand } from "./src/command.ts";
 import { type Freshness, loadConfig, type ResolvedConfig } from "./src/config.ts";
 
 const OPENAI_CODEX_PROVIDER = "openai-codex";
-const MAX_QUERIES = 5;
 
 interface QuerySuccess {
   query: string;
@@ -73,14 +72,14 @@ function buildTool(config: ResolvedConfig) {
     promptSnippet: `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
-      `Batch up to ${MAX_QUERIES} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
     parameters: Type.Object({
       queries: Type.Array(Type.String({ minLength: 1 }), {
         minItems: 1,
-        maxItems: MAX_QUERIES,
-        description: `One or more search queries to run in parallel (max ${MAX_QUERIES}).`,
+        maxItems: config.batchSize,
+        description: `One or more search queries to run in parallel (max ${config.batchSize}).`,
       }),
       search_context_size: Type.Optional(
         StringEnum(["low", "medium", "high"] as const, {

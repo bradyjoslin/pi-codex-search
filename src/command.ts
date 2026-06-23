@@ -11,6 +11,7 @@ import {
 import { type CodexModel, extractAccountIdFromToken, fetchCodexModels } from "./codex.ts";
 import {
   type ConfigScope,
+  DEFAULT_BATCH_SIZE,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
   DEFAULT_SEARCH_API,
@@ -19,6 +20,8 @@ import {
   deleteConfig,
   getConfigPath,
   loadConfig,
+  MAX_BATCH_SIZE,
+  MIN_BATCH_SIZE,
   type PiCodexSearchConfig,
   type ResolvedConfig,
   saveConfig,
@@ -156,6 +159,27 @@ const TEXT_FIELDS: TextField[] = [
       else delete c.clientVersion;
     },
   },
+  {
+    id: "batchSize",
+    label: "Batch size",
+    description: `Max parallel queries per tool call (${MIN_BATCH_SIZE}-${MAX_BATCH_SIZE})`,
+    defaultDisplay: String(DEFAULT_BATCH_SIZE),
+    get: (c) => (c.batchSize === undefined ? undefined : String(c.batchSize)),
+    apply: (c, v) => {
+      const trimmed = v.trim();
+      if (!trimmed) {
+        delete c.batchSize;
+        return;
+      }
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < MIN_BATCH_SIZE || parsed > MAX_BATCH_SIZE) {
+        throw new Error(
+          `Batch size must be an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
+        );
+      }
+      c.batchSize = parsed;
+    },
+  },
 ];
 
 function textDisplay(field: TextField, cfg: PiCodexSearchConfig): string {
@@ -265,7 +289,13 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       }
       const text = TEXT_FIELDS.find((f) => f.id === id);
       if (text) {
-        text.apply(drafts[scope], newValue.trim());
+        try {
+          text.apply(drafts[scope], newValue.trim());
+        } catch (error: unknown) {
+          ctx.ui.notify((error as Error).message, "error");
+          list.updateValue(id, textDisplay(text, drafts[scope]));
+          return;
+        }
         list.updateValue(id, textDisplay(text, drafts[scope]));
         save();
       }
@@ -329,7 +359,8 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       })
       .catch((error: unknown) => {
         if (modelItem) {
-          modelItem.description = "Could not load models from /codex/models (default = auto-select)";
+          modelItem.description =
+            "Could not load models from /codex/models (default = auto-select)";
         }
         list.invalidate();
         ctx.ui.notify(`Could not load model list: ${(error as Error).message}`, "warning");
@@ -454,6 +485,7 @@ function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
   lines.push(`  searchApi           = ${resolved.searchApi}`);
+  lines.push(`  batchSize           = ${resolved.batchSize}`);
   lines.push("");
   lines.push("Sources (env > project > home):");
   lines.push(`  env     = ${describeSource(resolved.sources.env)}`);
