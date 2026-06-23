@@ -374,6 +374,36 @@ describe("codex helpers", () => {
     ]);
   });
 
+  it("does not send unsupported index_gated_web_access to /codex/responses", async () => {
+    let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
+    const sse = [
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n',
+      'event: response.completed\ndata: {"response":{"usage":{"total_tokens":1}}}\n\n',
+    ].join("");
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const result = await runResponsesSearch({
+      query: "q",
+      model: "m",
+      transport,
+      externalWebAccess: true,
+      searchContextSize: "medium",
+    });
+
+    assert.equal(result.text, "ok");
+    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
+  });
+
   it("classifies HTTP 429 from /codex/responses as a rate_limit CodexError", async () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });
