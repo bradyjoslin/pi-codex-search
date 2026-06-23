@@ -74,6 +74,7 @@ function buildTool(config: ResolvedConfig) {
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
       `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+      "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
       "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
     ],
     parameters: Type.Object({
