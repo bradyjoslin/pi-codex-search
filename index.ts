@@ -298,13 +298,16 @@ function buildTool(config: ResolvedConfig) {
       const ctxSize =
         (args.search_context_size as string | undefined) ?? config.defaultSearchContextSize;
 
-      let text = theme.fg("toolTitle", theme.bold(`${config.toolName} `));
+      let text = theme.fg("toolTitle", theme.bold(config.toolName));
       if (queries.length === 1) {
-        text += theme.fg("accent", formatInline(queries[0] ?? "", 90));
+        text += ` ${theme.fg("accent", formatInline(queries[0] ?? "", 90))}`;
       } else {
-        text += theme.fg("accent", formatInline(formatQueriesInline(queries), 140));
+        text += ` ${theme.fg("accent", `${queries.length} queries`)}`;
       }
       text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
+      if (queries.length > 1) {
+        text += `\n${renderCallQueries(queries, theme)}`;
+      }
       return new Text(text, 0, 0);
     },
 
@@ -537,12 +540,16 @@ function renderQueriesPreview(queries: string[], theme: Theme): string {
   if (queries.length === 1) {
     return theme.fg("accent", `Query: ${formatInline(queries[0], 120)}`);
   }
-  return [
-    theme.fg("accent", "Queries:"),
-    ...queries.map((query, index) =>
-      theme.fg("dim", `  ${index + 1}. ${formatInline(query, 110)}`),
-    ),
-  ].join("\n");
+  return [theme.fg("accent", "Queries:"), renderCallQueries(queries, theme)].join("\n");
+}
+
+function renderCallQueries(queries: unknown[], theme: Theme): string {
+  return queries
+    .map(
+      (query, index) =>
+        `${theme.fg("accent", "  ⌕")} ${theme.fg("dim", `${index + 1}. ${formatInline(query, 110)}`)}`,
+    )
+    .join("\n");
 }
 
 function formatQueriesInline(queries: unknown[]): string {
