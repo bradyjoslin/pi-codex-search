@@ -26,7 +26,7 @@ This extension is for Pi workflows that need fresh or source-backed information:
 - A `codex_search` Pi tool.
 - 1–5 search queries per call in the default Responses API.
 - Experimental standalone `/alpha/search` mode with search, image search, open, find, click, screenshot, finance, weather, sports, and time commands, sent serially as one action per backend request.
-- `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size.
+- `live`, `indexed`, or `cached` freshness, plus `low` / `medium` / `high` search context size. Standalone mode disables `low` because Codex returns Cloudflare challenges for low-context standalone requests.
 - Streaming progress while Codex responds.
 - Collapsed result previews in the TUI, with full text and sources available when expanded.
 - Structured details: model, citations, search calls, response ids, usage, and per-query failures.
@@ -94,7 +94,7 @@ Example call:
 Arguments in default `responses` mode:
 
 - `queries` — required array of 1–5 search questions. Queries run in parallel and results are grouped by query.
-- `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`.
+- `search_context_size` — optional, one of `low`, `medium`, `high`; defaults to `medium`. In standalone mode, use `medium` or `high` only.
 - `freshness` — optional, `live`, `indexed`, or `cached`; defaults to `live`.
 
 Extra arguments in experimental `standalone` mode:
@@ -176,7 +176,7 @@ Full schema, all fields optional:
 
 `toolName` lets you avoid conflicts with another extension. Tool names must match `[a-zA-Z_][a-zA-Z0-9_]{0,63}`.
 
-`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, sends each search/web action serially as a separate request, stores returned ref ids for follow-up open/find/click/screenshot actions, and may be blocked by Cloudflare or backend session limits.
+`searchApi` chooses the backend path. `responses` is the default and uses the `/codex/responses` hosted web-search flow. `standalone` is experimental: it posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, sends each search/web action serially as a separate request, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits.
 
 Environment variable equivalents:
 

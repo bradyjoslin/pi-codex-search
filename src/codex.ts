@@ -20,6 +20,8 @@ export {
   runStandaloneCommands,
   externalWebAccessForFreshness,
   hasAnyCommand,
+  assertSupportedStandaloneCombination,
+  isUnsupportedStandaloneCombination,
 } from "./modes/standalone.ts";
 export type {
   SearchQuery,

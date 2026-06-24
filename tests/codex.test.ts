@@ -76,7 +76,7 @@ describe("codex helpers", () => {
     const headers = transport.buildHeaders("application/json");
 
     assert.equal(headers.get("originator"), "codex_cli_rs");
-    assert.equal(headers.get("openai-beta"), "responses=experimental");
+    assert.equal(headers.get("openai-beta"), null);
     assert.equal(headers.get("authorization"), "Bearer token");
     assert.equal(headers.get("chatgpt-account-id"), "account");
     assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
@@ -208,8 +208,10 @@ describe("codex helpers", () => {
   it("posts standalone search requests to /alpha/search", async () => {
     let requestedUrl = "";
     let requestedBody: unknown;
+    let requestedHeaders = new Headers();
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
       requestedUrl = String(input);
+      requestedHeaders = new Headers(init?.headers);
       requestedBody = JSON.parse(String(init?.body));
       return new Response(
         JSON.stringify({
@@ -232,10 +234,11 @@ describe("codex helpers", () => {
       sessionId: "pi-codex-search",
       searchQuery: [{ q: "OpenAI news" }],
       freshness: "indexed",
-      searchContextSize: "low",
+      searchContextSize: "medium",
     });
 
     assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
+    assert.equal(requestedHeaders.get("openai-beta"), "responses=experimental");
     assert.deepEqual(requestedBody, {
       id: "pi-codex-search",
       model: "gpt-test",
@@ -248,7 +251,7 @@ describe("codex helpers", () => {
       ],
       commands: { search_query: [{ q: "OpenAI news" }] },
       settings: {
-        search_context_size: "low",
+        search_context_size: "medium",
         allowed_callers: ["direct"],
         external_web_access: "indexed",
       },
@@ -376,6 +379,62 @@ describe("codex helpers", () => {
     }
   });
 
+  it("reuses caller-provided standalone session id across follow-up turns", async () => {
+    const ids: string[] = [];
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { id?: string };
+      if (body.id) ids.push(body.id);
+      return new Response(JSON.stringify({ output: "Lookup result turn0view0" }));
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    const sessionId = "pi-codex-session-123";
+
+    await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId,
+      open: [{ refId: "https://example.com" }],
+      freshness: "live",
+      searchContextSize: "medium",
+    });
+    await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId,
+      find: [{ refId: "turn0view0", pattern: "Example" }],
+      freshness: "live",
+      searchContextSize: "medium",
+    });
+
+    assert.deepEqual(ids, [sessionId, sessionId]);
+  });
+
+  it("rejects standalone low", async () => {
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+    });
+
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "OpenAI news" }],
+        freshness: "indexed",
+        searchContextSize: "low",
+      }),
+      /standalone\/low is disabled/,
+    );
+  });
+
   it("rejects standalone action batching", async () => {
     const transport = createTransport({
       token: "token",
@@ -481,7 +540,7 @@ describe("codex helpers", () => {
     assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
   });
 
-  it("sends index_gated_web_access=true only for indexed /codex/responses", async () => {
+  it("ignores index_gated_web_access for /codex/responses", async () => {
     let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
     const sse =
       'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n';
@@ -505,7 +564,7 @@ describe("codex helpers", () => {
       indexGatedWebAccess: true,
     });
 
-    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, true);
+    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
   });
 
   it("summarizes Cloudflare challenge HTML errors", async () => {

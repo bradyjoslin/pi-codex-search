@@ -8,6 +8,7 @@ import {
 import type { Static } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import {
+  assertSupportedStandaloneCombination,
   classifyError,
   CodexError,
   createRefStore,
@@ -33,6 +34,7 @@ interface QuerySuccess {
   text: string;
   citations: CodexCitation[];
   searchCalls: CodexSearchCall[];
+  refIds?: Record<string, string>;
   responseId?: string;
   usage?: {
     inputTokens?: number;
@@ -113,8 +115,9 @@ const StandaloneParametersSchema = Type.Object({
     }),
   ),
   search_context_size: Type.Optional(
-    StringEnum(["low", "medium", "high"] as const, {
-      description: "Amount of web context to retrieve. Defaults to medium.",
+    StringEnum(["medium", "high"] as const, {
+      description:
+        'Amount of web context to retrieve. Defaults to medium. Standalone mode disables "low".',
     }),
   ),
   freshness: Type.Optional(
@@ -217,7 +220,9 @@ const StandaloneParametersSchema = Type.Object({
 
 type StandaloneParameters = Static<typeof StandaloneParametersSchema>;
 
-type ToolParameters = Partial<StandaloneParameters> & {
+type ToolParameters = Partial<
+  Omit<StandaloneParameters, "queries" | "search_context_size" | "freshness">
+> & {
   queries?: string[];
   search_context_size?: SearchContextSize;
   freshness?: Freshness;
@@ -241,7 +246,7 @@ function buildTool(config: ResolvedConfig) {
     promptGuidelines: [
       `Use ${config.toolName} when current or source-backed information is needed.`,
       config.searchApi === "standalone"
-        ? "Standalone mode can search, open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send each action serially as a separate Codex request; do not batch standalone actions into one backend call."
+        ? "Standalone mode can search, open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send each action serially as a separate Codex request; do not batch standalone actions into one backend call. Do not use search_context_size low in standalone; use medium or high."
         : `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
       config.searchApi === "standalone"
         ? "When the user asks to read or inspect a webpage, use urls/open plus follow-up find/click/screenshot actions instead of shelling out to curl."
@@ -300,7 +305,14 @@ function buildTool(config: ResolvedConfig) {
 
       const model = await resolveSearchModel(ctx, token, accountId, config, signal);
       const freshness = params.freshness ?? config.defaultFreshness;
-      const searchContextSize = params.search_context_size ?? config.defaultSearchContextSize;
+      let searchContextSize = params.search_context_size ?? config.defaultSearchContextSize;
+      if (config.searchApi === "standalone") {
+        if (params.search_context_size === "low") {
+          assertSupportedStandaloneCombination("low", freshness);
+        }
+        if (searchContextSize === "low") searchContextSize = "medium";
+        assertSupportedStandaloneCombination(searchContextSize, freshness);
+      }
 
       const transport = createTransport({
         token,
@@ -425,6 +437,7 @@ function buildTool(config: ResolvedConfig) {
               citations: result.citations,
               searchCalls: result.searchCalls,
             };
+            if (result.refIds) success.refIds = result.refIds;
             if (result.usage) success.usage = result.usage;
             successes.push(success);
           } catch (error) {
@@ -508,7 +521,6 @@ function buildTool(config: ResolvedConfig) {
               model,
               transport,
               externalWebAccess: freshness !== "cached",
-              indexGatedWebAccess: freshness === "indexed" ? true : undefined,
               searchContextSize,
               sessionId: ctx.sessionManager.getSessionId(),
               threadId: ctx.sessionManager.getSessionId(),
@@ -568,8 +580,12 @@ function buildTool(config: ResolvedConfig) {
 
     renderCall(args, theme) {
       const fresh = (args.freshness as string | undefined) ?? config.defaultFreshness;
-      const ctxSize =
+      const requestedCtxSize =
         (args.search_context_size as string | undefined) ?? config.defaultSearchContextSize;
+      const ctxSize =
+        config.searchApi === "standalone" && requestedCtxSize === "low"
+          ? "medium"
+          : requestedCtxSize;
       const labels = buildCallLabels(args);
 
       let text = theme.fg("toolTitle", theme.bold(config.toolName));
@@ -601,22 +617,22 @@ function buildTool(config: ResolvedConfig) {
       const total = details.queryCount;
       const failed = details.failedQueryCount;
       const ok = total - failed;
-      const sourceCount = details.successes.reduce((acc, s) => acc + s.citations.length, 0);
+      const sourceCount = details.successes.reduce((acc, s) => acc + countSuccessSources(s), 0);
 
       let header: string;
       if (ok === 0) {
         header = theme.fg("warning", `⚠ Web search failed (${details.failure?.kind ?? "unknown"})`);
       } else if (failed > 0) {
-        header = theme.fg(
-          "warning",
-          `⚠ ${ok}/${total} queries succeeded · ${sourceCount} source${sourceCount === 1 ? "" : "s"}`,
-        );
+        const sourceSuffix =
+          sourceCount > 0 ? ` · ${sourceCount} source${sourceCount === 1 ? "" : "s"}` : "";
+        header = theme.fg("warning", `⚠ ${ok}/${total} queries succeeded${sourceSuffix}`);
       } else {
         const querySuffix = total === 1 ? "" : ` across ${total} queries`;
-        header = theme.fg(
-          "success",
-          `✓ ${sourceCount} source${sourceCount === 1 ? "" : "s"}${querySuffix}`,
-        );
+        const sourceText =
+          sourceCount > 0
+            ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
+            : "Search completed";
+        header = theme.fg("success", `✓ ${sourceText}${querySuffix}`);
       }
       header += theme.fg(
         "muted",
@@ -741,8 +757,18 @@ function formatSuccessBlock(success: QuerySuccess, multiple: boolean): string {
     const title = citation.title?.trim() || citation.url;
     return `${index + 1}. ${title}: ${citation.url}`;
   });
-  const body = sourceLines.length > 0 ? `${text}\n\nSources:\n${sourceLines.join("\n")}` : text;
+  const refLines = Object.keys(success.refIds ?? {}).map(
+    (refId, index) => `${index + 1}. ${refId}`,
+  );
+  const sourceBlock = sourceLines.length > 0 ? `Sources:\n${sourceLines.join("\n")}` : "";
+  const refBlock = refLines.length > 0 ? `Source refs:\n${refLines.join("\n")}` : "";
+  const blocks = [text, sourceBlock, refBlock].filter((block) => block.length > 0);
+  const body = blocks.join("\n\n");
   return multiple ? `## Query: ${success.query}\n\n${body}` : body;
+}
+
+function countSuccessSources(success: QuerySuccess): number {
+  return success.citations.length + Object.keys(success.refIds ?? {}).length;
 }
 
 function formatFailureBlock(failure: QueryFailure, multiple: boolean): string {

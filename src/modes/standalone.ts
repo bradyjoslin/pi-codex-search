@@ -110,6 +110,25 @@ export function hasAnyCommand(options: StandaloneCommandsOptions): boolean {
   return countCommands(options) > 0;
 }
 
+export function isUnsupportedStandaloneCombination(
+  searchContextSize: SearchContextSize | undefined,
+  _freshness: Freshness,
+): boolean {
+  return (searchContextSize ?? "medium") === "low";
+}
+
+export function assertSupportedStandaloneCombination(
+  searchContextSize: SearchContextSize | undefined,
+  freshness: Freshness,
+): void {
+  if (isUnsupportedStandaloneCombination(searchContextSize, freshness)) {
+    throw new CodexError(
+      "schema",
+      'standalone/low is disabled because Codex returns Cloudflare challenges for low-context standalone requests. Use search_context_size "medium" or "high".',
+    );
+  }
+}
+
 function countCommands(options: StandaloneCommandsOptions): number {
   return (
     (options.searchQuery?.length ?? 0) +
@@ -134,6 +153,7 @@ export async function runStandaloneCommands(
   if (countCommands(options) > 1) {
     throw new Error("Codex standalone actions must be sent one per request");
   }
+  assertSupportedStandaloneCombination(options.searchContextSize, options.freshness);
 
   const {
     transport,
@@ -146,6 +166,7 @@ export async function runStandaloneCommands(
     signal,
   } = options;
   const headers = transport.buildHeaders("application/json");
+  headers.set("OpenAI-Beta", "responses=experimental");
   headers.set("content-type", "application/json");
 
   const commands: Record<string, unknown> = {};
