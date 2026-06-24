@@ -236,6 +236,9 @@ async function runStandaloneActionSuite(
 ): Promise<E2eResult[]> {
   const results: E2eResult[] = [];
   const context = pickSupportedStandaloneContext(options.contexts);
+  if (!context) {
+    return [skippedStandaloneSuite("actions", options.freshnesses)];
+  }
   const freshness = pickSupportedStandaloneFreshness(options.freshnesses, context);
 
   const actionCases: Array<{ name: string; options: StandaloneCommandsOptions }> = [
@@ -337,6 +340,9 @@ async function runStandaloneSessionSuite(
   options: CliOptions,
 ): Promise<E2eResult[]> {
   const context = pickSupportedStandaloneContext(options.contexts);
+  if (!context) {
+    return [skippedStandaloneSuite("session", options.freshnesses)];
+  }
   const freshness = pickSupportedStandaloneFreshness(options.freshnesses, context);
   const sessionId = makeSessionId("conversation");
   const requestIds: string[] = [];
@@ -639,11 +645,28 @@ function unsupportedResult(
   return undefined;
 }
 
+function skippedStandaloneSuite(suite: E2eSuite, freshnesses: Freshness[]): E2eResult {
+  return {
+    suite,
+    name: suite,
+    api: "standalone",
+    freshness: freshnesses[0],
+    ok: true,
+    skipped: true,
+    ms: 0,
+    message:
+      'standalone actions require search_context_size "medium" or "high"; pass --context medium',
+  };
+}
+
 function parseList<T extends string>(value: string, allowed: readonly T[], label: string): T[] {
   const parsed = value
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+  if (parsed.length === 0) {
+    throw new Error(`Invalid ${label}: expected at least one of ${allowed.join(", ")}`);
+  }
   for (const item of parsed) {
     if (!allowed.includes(item as T)) {
       throw new Error(`Invalid ${label}: ${item}. Expected one of ${allowed.join(", ")}`);
@@ -693,10 +716,11 @@ function warnIfExpired(value: unknown): void {
   }
 }
 
-function pickSupportedStandaloneContext(values: SearchContextSize[]): SearchContextSize {
-  return values.includes("medium")
-    ? "medium"
-    : (values.find((value) => value !== "low") ?? "medium");
+function pickSupportedStandaloneContext(
+  values: SearchContextSize[],
+): SearchContextSize | undefined {
+  if (values.includes("medium")) return "medium";
+  return values.find((value) => value !== "low");
 }
 
 function pickSupportedStandaloneFreshness(
