@@ -51,7 +51,7 @@ interface QueryFailure {
 
 interface StandaloneCallPlan {
   query: string;
-  options: StandaloneCommandsOptions;
+  buildOptions: () => StandaloneCommandsOptions;
   openedUrl?: string;
 }
 
@@ -325,31 +325,6 @@ function buildTool(config: ResolvedConfig) {
         const sessionDir = ctx.sessionManager.getSessionDir();
         await refStore.load(sessionDir);
 
-        const resolvedUrls = await Promise.all(
-          urls.map(async (url) => {
-            const refId = refStore.resolveRefId(url) ?? url;
-            return { url, refId };
-          }),
-        );
-        const resolvedFind = await Promise.all(
-          findCommands.map(async (c: { url: string; pattern: string }) => {
-            const refId = refStore.resolveRefId(c.url) ?? c.url;
-            return { url: c.url, refId, pattern: c.pattern };
-          }),
-        );
-        const resolvedClick = await Promise.all(
-          clickCommands.map(async (c: { url: string; id: number }) => {
-            const refId = refStore.resolveRefId(c.url) ?? c.url;
-            return { url: c.url, refId, id: c.id };
-          }),
-        );
-        const resolvedScreenshot = await Promise.all(
-          screenshotCommands.map(async (c: { url: string; pageno: number }) => {
-            const refId = refStore.resolveRefId(c.url) ?? c.url;
-            return { url: c.url, refId, pageno: c.pageno };
-          }),
-        );
-
         const baseStandaloneOptions = {
           model,
           transport,
@@ -362,47 +337,56 @@ function buildTool(config: ResolvedConfig) {
         const standaloneCalls: StandaloneCallPlan[] = [
           ...queries.map((q) => ({
             query: q,
-            options: { ...baseStandaloneOptions, searchQuery: [{ q }] },
+            buildOptions: () => ({ ...baseStandaloneOptions, searchQuery: [{ q }] }),
           })),
           ...imageQueries.map((q) => ({
             query: `image: ${q}`,
-            options: { ...baseStandaloneOptions, imageQuery: [{ q }] },
+            buildOptions: () => ({ ...baseStandaloneOptions, imageQuery: [{ q }] }),
           })),
-          ...resolvedUrls.map((u) => ({
-            query: `open: ${u.url}`,
-            openedUrl: u.url,
-            options: { ...baseStandaloneOptions, open: [{ refId: u.refId }] },
-          })),
-          ...resolvedFind.map((c) => ({
-            query: `find "${c.pattern}" in ${c.url}`,
-            options: { ...baseStandaloneOptions, find: [{ refId: c.refId, pattern: c.pattern }] },
-          })),
-          ...resolvedClick.map((c) => ({
-            query: `click ${c.id} in ${c.url}`,
-            options: { ...baseStandaloneOptions, click: [{ refId: c.refId, id: c.id }] },
-          })),
-          ...resolvedScreenshot.map((c) => ({
-            query: `screenshot ${c.pageno} of ${c.url}`,
-            options: {
+          ...urls.map((url) => ({
+            query: `open: ${url}`,
+            openedUrl: url,
+            buildOptions: () => ({
               ...baseStandaloneOptions,
-              screenshot: [{ refId: c.refId, pageno: c.pageno }],
-            },
+              open: [{ refId: refStore.resolveRefId(url) ?? url }],
+            }),
+          })),
+          ...findCommands.map((c: { url: string; pattern: string }) => ({
+            query: `find "${c.pattern}" in ${c.url}`,
+            buildOptions: () => ({
+              ...baseStandaloneOptions,
+              find: [{ refId: refStore.resolveRefId(c.url) ?? c.url, pattern: c.pattern }],
+            }),
+          })),
+          ...clickCommands.map((c: { url: string; id: number }) => ({
+            query: `click ${c.id} in ${c.url}`,
+            buildOptions: () => ({
+              ...baseStandaloneOptions,
+              click: [{ refId: refStore.resolveRefId(c.url) ?? c.url, id: c.id }],
+            }),
+          })),
+          ...screenshotCommands.map((c: { url: string; pageno: number }) => ({
+            query: `screenshot ${c.pageno} of ${c.url}`,
+            buildOptions: () => ({
+              ...baseStandaloneOptions,
+              screenshot: [{ refId: refStore.resolveRefId(c.url) ?? c.url, pageno: c.pageno }],
+            }),
           })),
           ...financeCommands.map((c) => ({
             query: `finance: ${c.ticker}`,
-            options: { ...baseStandaloneOptions, finance: [c] },
+            buildOptions: () => ({ ...baseStandaloneOptions, finance: [c] }),
           })),
           ...weatherCommands.map((c) => ({
             query: `weather: ${c.location}`,
-            options: { ...baseStandaloneOptions, weather: [c] },
+            buildOptions: () => ({ ...baseStandaloneOptions, weather: [c] }),
           })),
           ...sportsCommands.map((c) => ({
             query: `sports: ${c.fn} ${c.league}${c.team ? ` ${c.team}` : ""}`,
-            options: { ...baseStandaloneOptions, sports: [c] },
+            buildOptions: () => ({ ...baseStandaloneOptions, sports: [c] }),
           })),
           ...timeCommands.map((c) => ({
             query: `time: ${c.utc_offset}`,
-            options: { ...baseStandaloneOptions, time: [c] },
+            buildOptions: () => ({ ...baseStandaloneOptions, time: [c] }),
           })),
         ];
 
@@ -424,7 +408,7 @@ function buildTool(config: ResolvedConfig) {
         const failures: QueryFailure[] = [];
         for (const call of standaloneCalls) {
           try {
-            const result = await runStandaloneCommands(call.options);
+            const result = await runStandaloneCommands(call.buildOptions());
             if (call.openedUrl) {
               const refId = Object.keys(result.refIds ?? {}).find((candidate) =>
                 /\bturn\d+fetch\d+\b/.test(candidate),
