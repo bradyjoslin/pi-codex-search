@@ -28,6 +28,7 @@ const ENV_KEYS = [
   "PI_CODEX_WEB_SEARCH_CONTEXT_SIZE",
   "PI_CODEX_WEB_SEARCH_FRESHNESS",
   "PI_CODEX_WEB_SEARCH_API",
+  "PI_CODEX_WEB_STANDALONE_ENABLED",
   "PI_CODEX_WEB_SEARCH_BATCH_SIZE",
 ] as const;
 
@@ -62,6 +63,8 @@ describe("config loader", () => {
   });
 
   it("guards missing project trust context", () => {
+    assert.equal(isProjectTrustedContext(undefined), true);
+    assert.equal(isProjectTrustedContext(null), true);
     assert.equal(isProjectTrustedContext({}), true);
     assert.equal(isProjectTrustedContext({ isProjectTrusted: false }), false);
     assert.equal(isProjectTrustedContext({ isProjectTrusted: () => false }), false);
@@ -165,6 +168,24 @@ describe("config loader", () => {
     assert.equal(resolved.model, "home_model");
     assert.ok(resolved.sources.home);
     assert.ok(resolved.sources.project);
+  });
+
+  it("lets project config explicitly disable home standalone tool", async () => {
+    await mkdir(join(home, ".pi"), { recursive: true });
+    await writeFile(
+      join(home, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ standaloneEnabled: true }),
+      "utf-8",
+    );
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ standaloneEnabled: false }),
+      "utf-8",
+    );
+
+    const resolved = await loadConfig(cwd);
+    assert.equal(resolved.standaloneEnabled, false);
   });
 
   it("skips the project file when the project is not trusted", async () => {

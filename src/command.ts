@@ -83,7 +83,7 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Standalone web tool",
     description:
       "Register codex_standalone_web for page open/find/click/screenshot and domain lookups",
-    values: () => [defaultTag(String(DEFAULT_STANDALONE_ENABLED)), "true"],
+    values: () => [defaultTag(String(DEFAULT_STANDALONE_ENABLED)), "true", "false"],
     get: (c) =>
       c.standaloneEnabled === undefined && c.searchApi !== "standalone"
         ? defaultTag(String(DEFAULT_STANDALONE_ENABLED))
@@ -252,10 +252,16 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
     if (currentScope === "project" && !isProjectTrusted) continue;
     if (normalizeStandaloneSearchContext(drafts[currentScope])) {
       const currentDraft = { ...drafts[currentScope] };
-      saveQueue = saveQueue.then(async () => {
-        await saveConfig(currentScope, ctx.cwd, currentDraft);
-        dirty = true;
-      });
+      saveQueue = saveQueue
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await saveConfig(currentScope, ctx.cwd, currentDraft);
+            dirty = true;
+          } catch (error: unknown) {
+            ctx.ui.notify((error as Error).message, "error");
+          }
+        });
     }
   }
 
@@ -285,14 +291,16 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       }
       const currentScope = scope;
       const currentDraft = { ...drafts[scope] };
-      saveQueue = saveQueue.then(async () => {
-        try {
-          await saveConfig(currentScope, ctx.cwd, currentDraft);
-          dirty = true;
-        } catch (error: unknown) {
-          ctx.ui.notify((error as Error).message, "error");
-        }
-      });
+      saveQueue = saveQueue
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await saveConfig(currentScope, ctx.cwd, currentDraft);
+            dirty = true;
+          } catch (error: unknown) {
+            ctx.ui.notify((error as Error).message, "error");
+          }
+        });
     };
 
     const onChange = (id: string, newValue: string) => {

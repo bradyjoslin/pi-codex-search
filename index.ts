@@ -253,7 +253,9 @@ function buildTool(config: ResolvedConfig) {
         : [
             `Use ${config.toolName} when current or source-backed information is needed.`,
             `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
-            "Use codex_standalone_web only when the user explicitly asks to open/read/inspect a webpage, find text inside an opened page, click a page link id, take a screenshot, or run finance/weather/sports/time lookups.",
+            config.standaloneEnabled
+              ? "Use codex_standalone_web only when the user explicitly asks to open/read/inspect a webpage, find text inside an opened page, click a page link id, take a screenshot, or run finance/weather/sports/time lookups."
+              : "codex_standalone_web is not enabled in this session; if the user asks for webpage actions, say that the Standalone web tool must be enabled in /codex-search-settings.",
             "Do not call codex_standalone_web merely to improve or duplicate a codex_search result.",
             "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
             "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",

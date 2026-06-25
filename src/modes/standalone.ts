@@ -241,6 +241,9 @@ export async function runStandaloneCommands(
     let rawText = await response.text();
     if (status === 403 && isCloudflareChallenge(rawText) && !signal?.aborted) {
       await delay(750, signal);
+      if (signal?.aborted) {
+        throw new CodexError("timeout", "Codex standalone request was aborted before retry.");
+      }
       response = await transport.fetch(transport.resolveSearchEndpoint(), {
         method: "POST",
         headers,

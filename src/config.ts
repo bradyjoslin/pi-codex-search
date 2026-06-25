@@ -62,6 +62,7 @@ export function getConfigPath(scope: ConfigScope, cwd: string): string {
 }
 
 export function isProjectTrustedContext(ctx: unknown): boolean {
+  if (ctx === null || ctx === undefined || typeof ctx !== "object") return true;
   const maybe = ctx as { isProjectTrusted?: unknown };
   if (typeof maybe.isProjectTrusted === "boolean") return maybe.isProjectTrusted;
   if (typeof maybe.isProjectTrusted !== "function") return true;
