@@ -410,9 +410,7 @@ function buildTool(config: ResolvedConfig) {
           try {
             const result = await runStandaloneCommands(call.buildOptions());
             if (call.openedUrl) {
-              const refId = Object.keys(result.refIds ?? {}).find((candidate) =>
-                /\bturn\d+fetch\d+\b/.test(candidate),
-              );
+              const refId = selectStandalonePageRefId(result.refIds);
               if (refId) await refStore.remember(call.openedUrl, refId);
             }
             const success: QuerySuccess = {
@@ -797,6 +795,16 @@ function renderCallQueries(queries: unknown[], theme: Theme): string {
         `${theme.fg("accent", iconPrefix)}${theme.fg("dim", line.slice(iconPrefix.length))}`,
     )
     .join("\n");
+}
+
+export function selectStandalonePageRefId(
+  refIds: Record<string, string> | undefined,
+): string | undefined {
+  const refs = Object.keys(refIds ?? {});
+  return (
+    refs.find((candidate) => /^turn\d+view\d+$/.test(candidate)) ??
+    refs.find((candidate) => /^turn\d+fetch\d+$/.test(candidate))
+  );
 }
 
 export function formatQueryPreviewLines(queries: unknown[], maxLength = 110): string[] {

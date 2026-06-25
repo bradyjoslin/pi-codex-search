@@ -21,7 +21,7 @@ import {
   selectDefaultModel,
   type StandaloneCommandsOptions,
 } from "../src/codex.ts";
-import { formatQueryPreviewLines } from "../index.ts";
+import { formatQueryPreviewLines, selectStandalonePageRefId } from "../index.ts";
 
 describe("codex helpers", () => {
   it("normalizes codex base URLs", () => {
@@ -377,6 +377,14 @@ describe("codex helpers", () => {
         }
       }
     }
+  });
+
+  it("prefers opened page refs for standalone follow-up actions", () => {
+    assert.equal(
+      selectStandalonePageRefId({ turn0search0: "turn0search0", turn0view0: "turn0view0" }),
+      "turn0view0",
+    );
+    assert.equal(selectStandalonePageRefId({ turn0fetch0: "turn0fetch0" }), "turn0fetch0");
   });
 
   it("reuses caller-provided standalone session id across follow-up turns", async () => {

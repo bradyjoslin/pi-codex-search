@@ -35,11 +35,17 @@ const DEFAULT_SUFFIX = " (default)";
 const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
 const isDefaultTag = (value: string): boolean => value.endsWith(DEFAULT_SUFFIX);
 
+function normalizeStandaloneSearchContext(config: PiCodexSearchConfig): boolean {
+  if (config.searchApi !== "standalone" || config.searchContextSize !== "low") return false;
+  config.searchContextSize = DEFAULT_SEARCH_CONTEXT_SIZE;
+  return true;
+}
+
 interface CycleField {
   id: string;
   label: string;
   description: string;
-  values: string[];
+  values(cfg: PiCodexSearchConfig): string[];
   get(cfg: PiCodexSearchConfig): string;
   apply(cfg: PiCodexSearchConfig, value: string): void;
 }
@@ -60,7 +66,7 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "enabled",
     label: "Enabled",
     description: "Register the search tool at session start",
-    values: [defaultTag(String(DEFAULT_ENABLED)), "false"],
+    values: () => [defaultTag(String(DEFAULT_ENABLED)), "false"],
     get: (c) =>
       c.enabled === undefined || c.enabled === DEFAULT_ENABLED
         ? defaultTag(String(DEFAULT_ENABLED))
@@ -74,7 +80,7 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "searchApi",
     label: "Search API",
     description: "responses (default, stable) or standalone (experimental) backend",
-    values: [defaultTag(DEFAULT_SEARCH_API), "standalone"],
+    values: () => [defaultTag(DEFAULT_SEARCH_API), "standalone"],
     get: (c) =>
       c.searchApi === undefined || c.searchApi === DEFAULT_SEARCH_API
         ? defaultTag(DEFAULT_SEARCH_API)
@@ -82,13 +88,14 @@ const CYCLE_FIELDS: CycleField[] = [
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.searchApi;
       else c.searchApi = v as PiCodexSearchConfig["searchApi"];
+      normalizeStandaloneSearchContext(c);
     },
   },
   {
     id: "freshness",
     label: "Freshness",
     description: "live / indexed / cached web access",
-    values: [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
+    values: () => [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
     get: (c) =>
       c.freshness === undefined || c.freshness === DEFAULT_FRESHNESS
         ? defaultTag(DEFAULT_FRESHNESS)
@@ -102,7 +109,10 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "searchContextSize",
     label: "Search context size",
     description: "Amount of web context to retrieve",
-    values: [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
+    values: (c) =>
+      c.searchApi === "standalone"
+        ? [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "high"]
+        : [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
     get: (c) =>
       c.searchContextSize === undefined || c.searchContextSize === DEFAULT_SEARCH_CONTEXT_SIZE
         ? defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE)
@@ -110,6 +120,7 @@ const CYCLE_FIELDS: CycleField[] = [
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.searchContextSize;
       else c.searchContextSize = v as PiCodexSearchConfig["searchContextSize"];
+      normalizeStandaloneSearchContext(c);
     },
   },
 ];
@@ -244,6 +255,17 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
   let dirty = false;
   let saveQueue: Promise<void> = Promise.resolve();
 
+  for (const currentScope of ["home", "project"] as const) {
+    if (currentScope === "project" && !isProjectTrusted) continue;
+    if (normalizeStandaloneSearchContext(drafts[currentScope])) {
+      const currentDraft = { ...drafts[currentScope] };
+      saveQueue = saveQueue.then(async () => {
+        await saveConfig(currentScope, ctx.cwd, currentDraft);
+        dirty = true;
+      });
+    }
+  }
+
   let models: CodexModel[] = [];
 
   await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => {
@@ -254,8 +276,13 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
 
     const refreshDisplays = () => {
       scopeItem.description = formatScopeDescription(scope, ctx.cwd);
-      for (const f of CYCLE_FIELDS) list.updateValue(f.id, f.get(drafts[scope]));
+      for (const f of CYCLE_FIELDS) {
+        const item = items.find((candidate) => candidate.id === f.id);
+        if (item) item.values = f.values(drafts[scope]);
+        list.updateValue(f.id, f.get(drafts[scope]));
+      }
       for (const f of TEXT_FIELDS) list.updateValue(f.id, textDisplay(f, drafts[scope]));
+      list.invalidate();
     };
 
     const save = () => {
@@ -284,6 +311,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       const cycle = CYCLE_FIELDS.find((f) => f.id === id);
       if (cycle) {
         cycle.apply(drafts[scope], newValue);
+        refreshDisplays();
         save();
         return;
       }
@@ -319,7 +347,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
           label: f.label,
           description: f.description,
           currentValue: f.get(drafts[scope]),
-          values: f.values,
+          values: f.values(drafts[scope]),
         }),
       ),
       ...TEXT_FIELDS.map(
