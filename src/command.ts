@@ -14,11 +14,12 @@ import {
   DEFAULT_BATCH_SIZE,
   DEFAULT_ENABLED,
   DEFAULT_FRESHNESS,
-  DEFAULT_SEARCH_API,
   DEFAULT_SEARCH_CONTEXT_SIZE,
-  DEFAULT_TOOL_NAME,
+  DEFAULT_STANDALONE_ENABLED,
+  STANDALONE_TOOL_NAME,
   deleteConfig,
   getConfigPath,
+  isProjectTrustedContext,
   loadConfig,
   MAX_BATCH_SIZE,
   MIN_BATCH_SIZE,
@@ -35,11 +36,18 @@ const DEFAULT_SUFFIX = " (default)";
 const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
 const isDefaultTag = (value: string): boolean => value.endsWith(DEFAULT_SUFFIX);
 
+function normalizeStandaloneSearchContext(config: PiCodexSearchConfig): boolean {
+  const standaloneEnabled = config.standaloneEnabled ?? config.searchApi === "standalone";
+  if (!standaloneEnabled || config.searchContextSize !== "low") return false;
+  config.searchContextSize = DEFAULT_SEARCH_CONTEXT_SIZE;
+  return true;
+}
+
 interface CycleField {
   id: string;
   label: string;
   description: string;
-  values: string[];
+  values(cfg: PiCodexSearchConfig): string[];
   get(cfg: PiCodexSearchConfig): string;
   apply(cfg: PiCodexSearchConfig, value: string): void;
 }
@@ -60,7 +68,7 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "enabled",
     label: "Enabled",
     description: "Register the search tool at session start",
-    values: [defaultTag(String(DEFAULT_ENABLED)), "false"],
+    values: () => [defaultTag(String(DEFAULT_ENABLED)), "false"],
     get: (c) =>
       c.enabled === undefined || c.enabled === DEFAULT_ENABLED
         ? defaultTag(String(DEFAULT_ENABLED))
@@ -71,24 +79,27 @@ const CYCLE_FIELDS: CycleField[] = [
     },
   },
   {
-    id: "searchApi",
-    label: "Search API",
-    description: "responses (default, stable) or standalone (experimental) backend",
-    values: [defaultTag(DEFAULT_SEARCH_API), "standalone"],
+    id: "standaloneEnabled",
+    label: "Standalone web tool",
+    description:
+      "Register codex_standalone_web for page open/find/click/screenshot and domain lookups",
+    values: () => [defaultTag(String(DEFAULT_STANDALONE_ENABLED)), "true", "false"],
     get: (c) =>
-      c.searchApi === undefined || c.searchApi === DEFAULT_SEARCH_API
-        ? defaultTag(DEFAULT_SEARCH_API)
-        : c.searchApi,
+      c.standaloneEnabled === undefined && c.searchApi !== "standalone"
+        ? defaultTag(String(DEFAULT_STANDALONE_ENABLED))
+        : String(c.standaloneEnabled ?? c.searchApi === "standalone"),
     apply: (c, v) => {
-      if (isDefaultTag(v)) delete c.searchApi;
-      else c.searchApi = v as PiCodexSearchConfig["searchApi"];
+      delete c.searchApi;
+      if (isDefaultTag(v)) delete c.standaloneEnabled;
+      else c.standaloneEnabled = v === "true";
+      normalizeStandaloneSearchContext(c);
     },
   },
   {
     id: "freshness",
     label: "Freshness",
     description: "live / indexed / cached web access",
-    values: [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
+    values: () => [defaultTag(DEFAULT_FRESHNESS), "cached", "indexed"],
     get: (c) =>
       c.freshness === undefined || c.freshness === DEFAULT_FRESHNESS
         ? defaultTag(DEFAULT_FRESHNESS)
@@ -102,7 +113,10 @@ const CYCLE_FIELDS: CycleField[] = [
     id: "searchContextSize",
     label: "Search context size",
     description: "Amount of web context to retrieve",
-    values: [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
+    values: (c) =>
+      c.standaloneEnabled || c.searchApi === "standalone"
+        ? [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "high"]
+        : [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
     get: (c) =>
       c.searchContextSize === undefined || c.searchContextSize === DEFAULT_SEARCH_CONTEXT_SIZE
         ? defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE)
@@ -110,22 +124,12 @@ const CYCLE_FIELDS: CycleField[] = [
     apply: (c, v) => {
       if (isDefaultTag(v)) delete c.searchContextSize;
       else c.searchContextSize = v as PiCodexSearchConfig["searchContextSize"];
+      normalizeStandaloneSearchContext(c);
     },
   },
 ];
 
 const TEXT_FIELDS: TextField[] = [
-  {
-    id: "toolName",
-    label: "Tool name",
-    description: "Tool name exposed to the LLM",
-    defaultDisplay: DEFAULT_TOOL_NAME,
-    get: (c) => c.toolName,
-    apply: (c, v) => {
-      if (v) c.toolName = v;
-      else delete c.toolName;
-    },
-  },
   {
     id: "model",
     label: "Model",
@@ -211,7 +215,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
         }
         if (trimmed === "reset") {
           if (ctx.hasUI) {
-            await openResetMenu(ctx, ctx.isProjectTrusted());
+            await openResetMenu(ctx, isProjectTrustedContext(ctx));
           } else {
             notify(
               ctx,
@@ -234,7 +238,7 @@ export function registerSettingsCommand(pi: ExtensionAPI): void {
 }
 
 async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
-  const isProjectTrusted = ctx.isProjectTrusted();
+  const isProjectTrusted = isProjectTrustedContext(ctx);
   const resolved = await loadConfig(ctx.cwd, isProjectTrusted);
   const drafts: Record<ConfigScope, PiCodexSearchConfig> = {
     project: { ...resolved.sources.project },
@@ -243,6 +247,23 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
   let scope: ConfigScope = isProjectTrusted ? "project" : "home";
   let dirty = false;
   let saveQueue: Promise<void> = Promise.resolve();
+
+  for (const currentScope of ["home", "project"] as const) {
+    if (currentScope === "project" && !isProjectTrusted) continue;
+    if (normalizeStandaloneSearchContext(drafts[currentScope])) {
+      const currentDraft = { ...drafts[currentScope] };
+      saveQueue = saveQueue
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await saveConfig(currentScope, ctx.cwd, currentDraft);
+            dirty = true;
+          } catch (error: unknown) {
+            ctx.ui.notify((error as Error).message, "error");
+          }
+        });
+    }
+  }
 
   let models: CodexModel[] = [];
 
@@ -254,8 +275,13 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
 
     const refreshDisplays = () => {
       scopeItem.description = formatScopeDescription(scope, ctx.cwd);
-      for (const f of CYCLE_FIELDS) list.updateValue(f.id, f.get(drafts[scope]));
+      for (const f of CYCLE_FIELDS) {
+        const item = items.find((candidate) => candidate.id === f.id);
+        if (item) item.values = f.values(drafts[scope]);
+        list.updateValue(f.id, f.get(drafts[scope]));
+      }
       for (const f of TEXT_FIELDS) list.updateValue(f.id, textDisplay(f, drafts[scope]));
+      list.invalidate();
     };
 
     const save = () => {
@@ -265,14 +291,16 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       }
       const currentScope = scope;
       const currentDraft = { ...drafts[scope] };
-      saveQueue = saveQueue.then(async () => {
-        try {
-          await saveConfig(currentScope, ctx.cwd, currentDraft);
-          dirty = true;
-        } catch (error: unknown) {
-          ctx.ui.notify((error as Error).message, "error");
-        }
-      });
+      saveQueue = saveQueue
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await saveConfig(currentScope, ctx.cwd, currentDraft);
+            dirty = true;
+          } catch (error: unknown) {
+            ctx.ui.notify((error as Error).message, "error");
+          }
+        });
     };
 
     const onChange = (id: string, newValue: string) => {
@@ -284,6 +312,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
       const cycle = CYCLE_FIELDS.find((f) => f.id === id);
       if (cycle) {
         cycle.apply(drafts[scope], newValue);
+        refreshDisplays();
         save();
         return;
       }
@@ -319,7 +348,7 @@ async function openSettingsMenu(ctx: ExtensionCommandContext): Promise<void> {
           label: f.label,
           description: f.description,
           currentValue: f.get(drafts[scope]),
-          values: f.values,
+          values: f.values(drafts[scope]),
         }),
       ),
       ...TEXT_FIELDS.map(
@@ -471,23 +500,24 @@ async function openResetMenu(
 }
 
 async function printStatus(ctx: ExtensionCommandContext): Promise<void> {
-  const resolved = await loadConfig(ctx.cwd, ctx.isProjectTrusted());
+  const resolved = await loadConfig(ctx.cwd, isProjectTrustedContext(ctx));
   notify(ctx, formatStatus(resolved, ctx.cwd));
 }
 
 export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   const lines = ["Codex Search settings:"];
   lines.push(`  enabled             = ${resolved.enabled}`);
-  lines.push(`  toolName            = ${resolved.toolName}`);
+  lines.push(`  searchToolName      = codex_search`);
+  lines.push(`  standaloneToolName  = ${STANDALONE_TOOL_NAME}`);
   lines.push(`  model               = ${resolved.model ?? "(auto from /codex/models)"}`);
   lines.push(`  baseUrl             = ${resolved.baseUrl ?? "(default)"}`);
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);
-  lines.push(
-    `  searchApi           = ${resolved.searchApi}${resolved.searchApi === "standalone" ? " (experimental)" : ""}`,
-  );
+  lines.push(`  searchApi           = responses`);
+  lines.push(`  standaloneEnabled   = ${resolved.standaloneEnabled}`);
   lines.push(`  maxBatchSize        = ${resolved.batchSize}`);
+  lines.push(`  standaloneBatchSize = 1`);
   lines.push("");
   lines.push("Sources (env > project > home):");
   lines.push(`  env     = ${describeSource(resolved.sources.env)}`);

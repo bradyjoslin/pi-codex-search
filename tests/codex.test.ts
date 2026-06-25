@@ -1,19 +1,27 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  buildCodexUserAgent,
   classifyError,
   CodexError,
   extractAccountIdFromToken,
   fetchCodexModels,
-  fetchCodexStandaloneSearch,
-  fetchCodexStandaloneSearchBatch,
-  fetchCodexWebSearch,
+  createTransport,
+  ChatGptCloudflareCookieStore,
+  createRefStore,
+  wrapFetchWithCookies,
+  runStandaloneCommands,
+  runResponsesSearch,
   normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
   selectDefaultModel,
+  type StandaloneCommandsOptions,
 } from "../src/codex.ts";
-import { formatQueryPreviewLines } from "../index.ts";
+import { formatQueryPreviewLines, selectStandalonePageRefId } from "../index.ts";
 
 describe("codex helpers", () => {
   it("normalizes codex base URLs", () => {
@@ -55,6 +63,108 @@ describe("codex helpers", () => {
     );
   });
 
+  it("formats Codex user agent architecture like upstream", () => {
+    const expectedArch = process.arch === "x64" ? "x86_64" : process.arch;
+    assert.match(
+      buildCodexUserAgent(),
+      new RegExp(`; ${expectedArch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\)`),
+    );
+  });
+
+  it("builds Codex-aligned transport headers", () => {
+    const transport = createTransport({ token: "token", accountId: "account" });
+    const headers = transport.buildHeaders("application/json");
+
+    assert.equal(headers.get("originator"), "codex_cli_rs");
+    assert.equal(headers.get("openai-beta"), null);
+    assert.equal(headers.get("authorization"), "Bearer token");
+    assert.equal(headers.get("chatgpt-account-id"), "account");
+    assert.match(headers.get("user-agent") ?? "", /^codex_cli_rs\/0\.143\.0 /);
+  });
+
+  it("preserves Request headers when wrapping fetch with cookies", async () => {
+    let observedHeaders = new Headers();
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      observedHeaders = new Headers(init?.headers);
+      return new Response("ok");
+    };
+    const wrapped = wrapFetchWithCookies(fetchImpl);
+    const request = new Request("https://example.test/", {
+      headers: { "x-from-request": "request" },
+    });
+
+    await wrapped(request, { headers: { "x-from-init": "init" } });
+
+    assert.equal(observedHeaders.get("x-from-request"), "request");
+    assert.equal(observedHeaders.get("x-from-init"), "init");
+  });
+
+  it("stores only Cloudflare cookies for ChatGPT hosts", () => {
+    const store = new ChatGptCloudflareCookieStore();
+    const url = new URL("https://chatgpt.com/backend-api/codex/responses");
+
+    store.setCookies(
+      [
+        "cf_clearance=clearance; Path=/; Secure; HttpOnly",
+        "__Secure-next-auth.session-token=secret; Path=/; Secure; HttpOnly",
+      ],
+      url,
+    );
+
+    assert.equal(store.cookiesForUrl(url), "cf_clearance=clearance");
+    assert.equal(
+      store.cookiesForUrl(new URL("https://foo.chatgpt.com/backend-api/codex/responses")),
+      undefined,
+    );
+    assert.equal(store.cookiesForUrl(new URL("https://api.openai.com/v1/responses")), undefined);
+  });
+
+  it("persists standalone ref ids by URL", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-"));
+    try {
+      const first = createRefStore();
+      await first.load(dir);
+      await first.remember("https://example.com/docs", "turn0fetch0");
+
+      const second = createRefStore();
+      await second.load(dir);
+      assert.equal(second.resolveRefId("https://example.com/docs"), "turn0fetch0");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges concurrent ref id persistence", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-race-"));
+    try {
+      const first = createRefStore();
+      const second = createRefStore();
+      await Promise.all([first.load(dir), second.load(dir)]);
+      await Promise.all([
+        first.remember("https://example.com/a", "turn0fetch0"),
+        second.remember("https://example.com/b", "turn0fetch1"),
+      ]);
+
+      const reloaded = createRefStore();
+      await reloaded.load(dir);
+      assert.equal(reloaded.resolveRefId("https://example.com/a"), "turn0fetch0");
+      assert.equal(reloaded.resolveRefId("https://example.com/b"), "turn0fetch1");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast on corrupt persisted ref ids", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "pi-codex-refs-bad-"));
+    try {
+      await writeFile(join(dir, "pi-codex-search-refs.json"), "{bad json", "utf-8");
+      const store = createRefStore();
+      await assert.rejects(store.load(dir), SyntaxError);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("extracts account id from an access token JWT", () => {
     const payload = Buffer.from(
       JSON.stringify({
@@ -87,7 +197,7 @@ describe("codex helpers", () => {
         fetchImpl: fetchImpl as typeof fetch,
       }),
       (error: unknown) => {
-        assert.ok(error instanceof CodexError);
+        assert.ok(error instanceof CodexError, `expected CodexError, got ${error}`);
         assert.equal(error.kind, "auth");
         assert.equal(error.status, 401);
         return true;
@@ -98,8 +208,10 @@ describe("codex helpers", () => {
   it("posts standalone search requests to /alpha/search", async () => {
     let requestedUrl = "";
     let requestedBody: unknown;
+    let requestedHeaders = new Headers();
     const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
       requestedUrl = String(input);
+      requestedHeaders = new Headers(init?.headers);
       requestedBody = JSON.parse(String(init?.body));
       return new Response(
         JSON.stringify({
@@ -109,18 +221,24 @@ describe("codex helpers", () => {
       );
     };
 
-    const result = await fetchCodexStandaloneSearch({
-      query: "OpenAI news",
+    const transport = createTransport({
       token: "token",
       accountId: "account",
-      model: "gpt-test",
       baseUrl: "https://example.test/backend/codex",
-      externalWebAccess: "indexed",
-      searchContextSize: "low",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
+    const result = await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId: "pi-codex-search",
+      searchQuery: [{ q: "OpenAI news" }],
+      freshness: "indexed",
+      searchContextSize: "medium",
+    });
+
     assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
+    assert.equal(requestedHeaders.get("openai-beta"), "responses=experimental");
     assert.deepEqual(requestedBody, {
       id: "pi-codex-search",
       model: "gpt-test",
@@ -133,10 +251,11 @@ describe("codex helpers", () => {
       ],
       commands: { search_query: [{ q: "OpenAI news" }] },
       settings: {
-        search_context_size: "low",
+        search_context_size: "medium",
         allowed_callers: ["direct"],
         external_web_access: "indexed",
       },
+      max_output_tokens: 8000,
     });
     assert.equal(result.text, "Search result from [OpenAI](https://openai.com).");
     assert.equal(result.encryptedOutput, "ciphertext");
@@ -145,81 +264,248 @@ describe("codex helpers", () => {
     ]);
   });
 
-  it("batches standalone queries into one /alpha/search request", async () => {
-    let requestedBody: unknown;
+  it("posts standalone web content and lookup commands one action per request", async () => {
+    const cases: Array<{
+      options: Partial<StandaloneCommandsOptions>;
+      expectedCommands: Record<string, unknown>;
+      expectedCall?: { actionType?: string; refId?: string; query?: string };
+    }> = [
+      {
+        options: { open: [{ refId: "https://example.com/docs" }] },
+        expectedCommands: { open: [{ ref_id: "https://example.com/docs" }] },
+        expectedCall: { actionType: "open_page", refId: "https://example.com/docs" },
+      },
+      {
+        options: { find: [{ refId: "https://example.com/docs", pattern: "install" }] },
+        expectedCommands: {
+          find: [{ ref_id: "https://example.com/docs", pattern: "install" }],
+        },
+        expectedCall: { actionType: "find_in_page", refId: "https://example.com/docs" },
+      },
+      {
+        options: { click: [{ refId: "https://example.com/docs", id: 7 }] },
+        expectedCommands: { click: [{ ref_id: "https://example.com/docs", id: 7 }] },
+        expectedCall: { actionType: "click", refId: "https://example.com/docs" },
+      },
+      {
+        options: { screenshot: [{ refId: "https://example.com/docs", pageno: 1 }] },
+        expectedCommands: {
+          screenshot: [{ ref_id: "https://example.com/docs", pageno: 1 }],
+        },
+        expectedCall: { actionType: "screenshot", refId: "https://example.com/docs" },
+      },
+      {
+        options: { finance: [{ ticker: "AMD", type: "equity", market: "USA" }] },
+        expectedCommands: { finance: [{ ticker: "AMD", type: "equity", market: "USA" }] },
+        expectedCall: { actionType: "finance", query: "AMD" },
+      },
+      {
+        options: { weather: [{ location: "San Francisco, CA" }] },
+        expectedCommands: { weather: [{ location: "San Francisco, CA" }] },
+        expectedCall: { actionType: "weather", query: "San Francisco, CA" },
+      },
+      {
+        options: {
+          sports: [
+            {
+              fn: "schedule",
+              league: "nba",
+              team: "GSW",
+              date_from: "2026-01-01",
+              date_to: "2026-01-31",
+              num_games: 3,
+            },
+          ],
+        },
+        expectedCommands: {
+          sports: [
+            {
+              fn: "schedule",
+              league: "nba",
+              team: "GSW",
+              date_from: "2026-01-01",
+              date_to: "2026-01-31",
+              num_games: 3,
+            },
+          ],
+        },
+        expectedCall: { actionType: "sports", query: "schedule nba" },
+      },
+      {
+        options: { time: [{ utc_offset: "+03:00" }] },
+        expectedCommands: { time: [{ utc_offset: "+03:00" }] },
+        expectedCall: { actionType: "time", query: "+03:00" },
+      },
+      {
+        options: { imageQuery: [{ q: "waterfalls" }] },
+        expectedCommands: { image_query: [{ q: "waterfalls" }] },
+        expectedCall: { actionType: "image_query", query: "waterfalls" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let requestedBody = {} as { commands?: Record<string, unknown> };
+      const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+        requestedBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ output: "Lookup result turn0fetch0" }));
+      };
+
+      const transport = createTransport({
+        token: "token",
+        accountId: "account",
+        baseUrl: "https://example.test/backend/codex",
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+
+      const result = await runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        freshness: "live",
+        ...testCase.options,
+      });
+
+      assert.deepEqual(requestedBody.commands, testCase.expectedCommands);
+      if (testCase.expectedCall) {
+        const call = result.searchCalls[0];
+        assert.equal(call?.actionType, testCase.expectedCall.actionType);
+        if (testCase.expectedCall.refId !== undefined) {
+          assert.equal(call?.refId, testCase.expectedCall.refId);
+        }
+        if (testCase.expectedCall.query !== undefined) {
+          assert.equal(call?.query, testCase.expectedCall.query);
+        }
+      }
+    }
+  });
+
+  it("prefers opened page refs for standalone follow-up actions", () => {
+    assert.equal(
+      selectStandalonePageRefId({ turn0search0: "turn0search0", turn0view0: "turn0view0" }),
+      "turn0view0",
+    );
+    assert.equal(selectStandalonePageRefId({ turn0fetch0: "turn0fetch0" }), "turn0fetch0");
+  });
+
+  it("reuses caller-provided standalone session id across follow-up turns", async () => {
+    const ids: string[] = [];
     const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-      requestedBody = JSON.parse(String(init?.body));
-      return new Response(
-        JSON.stringify({
-          output: "Batch result",
-        }),
-      );
+      const body = JSON.parse(String(init?.body)) as { id?: string };
+      if (body.id) ids.push(body.id);
+      return new Response(JSON.stringify({ output: "Lookup result turn0view0" }));
     };
 
-    const result = await fetchCodexStandaloneSearchBatch({
-      queries: ["OpenAI news", "Codex release notes"],
+    const transport = createTransport({
       token: "token",
       accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+    const sessionId = "pi-codex-session-123";
+
+    await runStandaloneCommands({
       model: "gpt-test",
+      transport,
+      sessionId,
+      open: [{ refId: "https://example.com" }],
+      freshness: "live",
+      searchContextSize: "medium",
+    });
+    await runStandaloneCommands({
+      model: "gpt-test",
+      transport,
+      sessionId,
+      find: [{ refId: "turn0view0", pattern: "Example" }],
+      freshness: "live",
+      searchContextSize: "medium",
+    });
+
+    assert.deepEqual(ids, [sessionId, sessionId]);
+  });
+
+  it("rejects standalone low", async () => {
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+    });
+
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "OpenAI news" }],
+        freshness: "indexed",
+        searchContextSize: "low",
+      }),
+      /standalone\/low is disabled/,
+    );
+  });
+
+  it("rejects standalone action batching", async () => {
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+    });
+
+    await assert.rejects(
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
+        freshness: "live",
+      }),
+      /one per request/,
+    );
+  });
+
+  it("sets response_length for standalone single requests when requested", async () => {
+    let requestedBody = {} as { commands?: { response_length?: string } };
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output: "Result" }));
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
       baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
-    assert.deepEqual(requestedBody, {
-      id: "pi-codex-search",
+    await runStandaloneCommands({
       model: "gpt-test",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "OpenAI news\nCodex release notes" }],
-        },
-      ],
-      commands: {
-        search_query: [{ q: "OpenAI news" }, { q: "Codex release notes" }],
-      },
-      settings: {
-        search_context_size: "medium",
-        allowed_callers: ["direct"],
-        external_web_access: true,
-      },
-    });
-    assert.equal(result.text, "Batch result");
-    assert.deepEqual(
-      result.searchCalls.map((call) => call.query),
-      ["OpenAI news", "Codex release notes"],
-    );
-  });
-
-  it("sets response_length for standalone batches above three queries", async () => {
-    let requestedBody = {} as { commands?: { response_length?: string } };
-    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
-      requestedBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ output: "Batch result" }));
-    };
-
-    await fetchCodexStandaloneSearchBatch({
-      queries: ["q1", "q2", "q3", "q4"],
-      token: "token",
-      accountId: "account",
-      model: "gpt-test",
-      fetchImpl: fetchImpl as typeof fetch,
+      transport,
+      sessionId: "pi-codex-search",
+      searchQuery: [{ q: "q1" }],
+      freshness: "live",
+      responseLength: "medium",
     });
 
     assert.equal(requestedBody.commands?.response_length, "medium");
   });
 
-  it("rejects empty standalone query batches", async () => {
+  it("rejects empty standalone command batches", async () => {
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+    });
+
     await assert.rejects(
-      fetchCodexStandaloneSearchBatch({
-        queries: [" ", ""],
-        token: "token",
-        accountId: "account",
+      runStandaloneCommands({
         model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [],
+        freshness: "live",
       }),
       (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "schema");
+        assert.ok(error instanceof Error);
+        assert.match((error as Error).message, /at least one command/);
         return true;
       },
     );
@@ -232,91 +518,93 @@ describe("codex helpers", () => {
     ]);
   });
 
-  it("returns a concise Cloudflare error for standalone search 403", async () => {
-    const fetchImpl = async () =>
-      new Response("<html><title>Just a moment...</title><body>Cloudflare</body></html>", {
-        status: 403,
-        statusText: "Forbidden",
-        headers: { "content-type": "text/html", "cf-ray": "test-ray" },
-      });
+  it("does not send unsupported index_gated_web_access to /codex/responses", async () => {
+    let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
+    const sse = [
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n',
+      'event: response.completed\ndata: {"response":{"usage":{"total_tokens":1}}}\n\n',
+    ].join("");
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    };
 
-    await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /Cloudflare blocked the request/);
-        assert.match(error.message, /searchApi=responses/);
-        assert.doesNotMatch(error.message, /<html>/);
-        return true;
-      },
-    );
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    const result = await runResponsesSearch({
+      query: "q",
+      model: "m",
+      transport,
+      externalWebAccess: true,
+      searchContextSize: "medium",
+    });
+
+    assert.equal(result.text, "ok");
+    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
   });
 
-  it("does not return raw HTML bodies to the model", async () => {
+  it("ignores index_gated_web_access for /codex/responses", async () => {
+    let requestedBody = {} as { tools?: Array<Record<string, unknown>> };
+    const sse =
+      'event: response.output_item.done\ndata: {"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}\n\n';
+    const fetchImpl = async (_input: string | URL | Request, init?: RequestInit) => {
+      requestedBody = JSON.parse(String(init?.body));
+      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    };
+
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    await runResponsesSearch({
+      query: "q",
+      model: "m",
+      transport,
+      externalWebAccess: true,
+      indexGatedWebAccess: true,
+    });
+
+    assert.equal(requestedBody.tools?.[0]?.index_gated_web_access, undefined);
+  });
+
+  it("summarizes Cloudflare challenge HTML errors", async () => {
     const fetchImpl = async () =>
       new Response(
-        "<html><head><title>Forbidden &amp; blocked</title></head><body>secret challenge</body></html>",
+        '<html><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></html>',
         {
           status: 403,
-          statusText: "Forbidden",
           headers: { "content-type": "text/html" },
         },
       );
 
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend/codex",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
     await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
+      runStandaloneCommands({
+        model: "gpt-test",
+        transport,
+        sessionId: "pi-codex-search",
+        searchQuery: [{ q: "q" }],
+        freshness: "live",
       }),
       (error: unknown) => {
         assert.ok(error instanceof CodexError);
         assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /HTTP 403/);
-        assert.match(error.message, /HTML page title: Forbidden & blocked/);
+        assert.match(error.message, /Cloudflare challenge blocked/);
         assert.doesNotMatch(error.message, /<html>/);
-        assert.doesNotMatch(error.message, /secret challenge/);
-        return true;
-      },
-    );
-  });
-
-  it("keeps backend error details when Cloudflare headers wrap a JSON API error", async () => {
-    const fetchImpl = async () =>
-      new Response('{"error":"backend denied"}', {
-        status: 403,
-        statusText: "Forbidden",
-        headers: { "content-type": "application/json", "cf-ray": "test-ray" },
-      });
-
-    await assert.rejects(
-      fetchCodexStandaloneSearch({
-        query: "q",
-        token: "t",
-        accountId: "a",
-        model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof CodexError);
-        assert.equal(error.kind, "auth");
-        assert.equal(error.status, 403);
-        assert.match(error.message, /backend denied/);
-        assert.doesNotMatch(error.message, /Cloudflare blocked the request/);
         return true;
       },
     );
@@ -326,14 +614,19 @@ describe("codex helpers", () => {
     const fetchImpl = async () =>
       new Response("too many", { status: 429, statusText: "Too Many Requests" });
 
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
     await assert.rejects(
-      fetchCodexWebSearch({
+      runResponsesSearch({
         query: "q",
-        token: "t",
-        accountId: "a",
         model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
+        transport,
+        externalWebAccess: true,
       }),
       (error: unknown) => {
         assert.ok(error instanceof CodexError);
@@ -345,21 +638,27 @@ describe("codex helpers", () => {
   });
 
   it("maps response.failed events to a kind based on the error message", async () => {
-    const sse = 'event: response.failed\ndata: {"error":{"message":"Rate limit exceeded"}}\n\n';
+    const sse =
+      'event: response.failed\r\ndata: {"error":{"message":"Rate limit exceeded"}}\r\n\r\n';
     const fetchImpl = async () =>
       new Response(sse, {
         status: 200,
         headers: { "content-type": "text/event-stream" },
       });
 
+    const transport = createTransport({
+      token: "token",
+      accountId: "account",
+      baseUrl: "https://example.test/backend",
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
     await assert.rejects(
-      fetchCodexWebSearch({
+      runResponsesSearch({
         query: "q",
-        token: "t",
-        accountId: "a",
         model: "m",
-        baseUrl: "https://example.test/backend",
-        fetchImpl: fetchImpl as typeof fetch,
+        transport,
+        externalWebAccess: true,
       }),
       (error: unknown) => {
         assert.ok(error instanceof CodexError);

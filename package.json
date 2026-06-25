@@ -34,6 +34,7 @@
   "files": [
     "index.ts",
     "src",
+    "scripts/codex-e2e.ts",
     "package.json",
     "README.md",
     "LICENSE"
@@ -47,7 +48,8 @@
     "lint": "oxlint .",
     "format": "oxfmt . --write",
     "format:check": "oxfmt . --check",
-    "pre-commit": "prek run"
+    "pre-commit": "prek run",
+    "e2e:codex": "node scripts/codex-e2e.ts"
   },
   "devDependencies": {
     "@j178/prek": "^0.3.8",
@@ -60,6 +62,9 @@
     "@earendil-works/pi-ai": "^0.79.10",
     "@earendil-works/pi-coding-agent": "^0.79.10",
     "@earendil-works/pi-tui": "^0.79.10"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "pi": {
     "extensions": [

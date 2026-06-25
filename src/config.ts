@@ -1,7 +1,9 @@
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { SearchApi, SearchContextSize } from "./codex.ts";
+import type { SearchContextSize } from "./codex.ts";
+
+export type SearchApi = "standalone" | "responses";
 
 export type Freshness = "live" | "cached" | "indexed";
 
@@ -16,6 +18,7 @@ export interface PiCodexSearchConfig {
   searchContextSize?: SearchContextSize;
   freshness?: Freshness;
   searchApi?: SearchApi;
+  standaloneEnabled?: boolean;
   batchSize?: number;
 }
 
@@ -28,6 +31,7 @@ export interface ResolvedConfig {
   defaultSearchContextSize: SearchContextSize;
   defaultFreshness: Freshness;
   searchApi: SearchApi;
+  standaloneEnabled: boolean;
   batchSize: number;
   sources: {
     project?: PiCodexSearchConfig;
@@ -41,6 +45,8 @@ export const DEFAULT_TOOL_NAME = "codex_search";
 export const DEFAULT_SEARCH_CONTEXT_SIZE: SearchContextSize = "medium";
 export const DEFAULT_FRESHNESS: Freshness = "live";
 export const DEFAULT_SEARCH_API: SearchApi = "responses";
+export const DEFAULT_STANDALONE_ENABLED = false;
+export const STANDALONE_TOOL_NAME = "codex_standalone_web";
 export const DEFAULT_BATCH_SIZE = 5;
 export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
@@ -53,6 +59,18 @@ export const MAX_BATCH_SIZE = 32;
 export function getConfigPath(scope: ConfigScope, cwd: string): string {
   if (scope === "project") return join(cwd, ".pi", CONFIG_FILE_NAME);
   return join(homedir(), ".pi", CONFIG_FILE_NAME);
+}
+
+export function isProjectTrustedContext(ctx: unknown): boolean {
+  if (ctx === null || ctx === undefined || typeof ctx !== "object") return true;
+  const maybe = ctx as { isProjectTrusted?: unknown };
+  if (typeof maybe.isProjectTrusted === "boolean") return maybe.isProjectTrusted;
+  if (typeof maybe.isProjectTrusted !== "function") return true;
+  try {
+    return Boolean(maybe.isProjectTrusted());
+  } catch {
+    return false;
+  }
 }
 
 export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<ResolvedConfig> {
@@ -73,7 +91,10 @@ export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<
     toolName: merged.toolName ?? DEFAULT_TOOL_NAME,
     defaultSearchContextSize: merged.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE,
     defaultFreshness: merged.freshness ?? DEFAULT_FRESHNESS,
-    searchApi: merged.searchApi ?? DEFAULT_SEARCH_API,
+    searchApi: DEFAULT_SEARCH_API,
+    standaloneEnabled:
+      merged.standaloneEnabled ??
+      (merged.searchApi === "standalone" ? true : DEFAULT_STANDALONE_ENABLED),
     batchSize: merged.batchSize ?? DEFAULT_BATCH_SIZE,
     sources: {},
   };
@@ -153,6 +174,8 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   if (freshness !== undefined) env.freshness = freshness as Freshness;
   const searchApi = trimmedEnv("PI_CODEX_WEB_SEARCH_API");
   if (searchApi !== undefined) env.searchApi = searchApi as SearchApi;
+  const standaloneEnabled = booleanEnv("PI_CODEX_WEB_STANDALONE_ENABLED");
+  if (standaloneEnabled !== undefined) env.standaloneEnabled = standaloneEnabled;
   const batchSize = integerEnv("PI_CODEX_WEB_SEARCH_BATCH_SIZE");
   if (batchSize !== undefined) env.batchSize = batchSize;
 
@@ -192,6 +215,11 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
     throw new Error(
       `Invalid freshness in ${sourceLabel}: ${JSON.stringify(config.freshness)}. ` +
         `Expected one of ${FRESHNESS_VALUES.join(", ")}.`,
+    );
+  }
+  if (config.standaloneEnabled !== undefined && typeof config.standaloneEnabled !== "boolean") {
+    throw new Error(
+      `Invalid standaloneEnabled in ${sourceLabel}: ${JSON.stringify(config.standaloneEnabled)}. Must be a boolean.`,
     );
   }
   if (config.searchApi !== undefined && !SEARCH_API_VALUES.includes(config.searchApi)) {
