@@ -85,7 +85,7 @@ interface WebSearchDetails {
 function buildToolDescription(config: ResolvedConfig): string {
   const toolName = config.toolName;
   if (config.searchApi === "standalone") {
-    return `${toolName}: open/fetch webpages, find text, click link ids, screenshot pages, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`;
+    return `${toolName}: standalone webpage actions for explicit page inspection: open one URL, find text, click link ids, screenshot pages, or run finance/weather/sports/time lookups. Not for web search.`;
   }
   return `${toolName}: search the web using the configured ChatGPT Codex subscription.`;
 }
@@ -232,23 +232,32 @@ function buildToolParameters(config: ResolvedConfig) {
 function buildTool(config: ResolvedConfig) {
   return defineTool({
     name: config.toolName,
-    label: "Codex Search",
+    label: config.searchApi === "standalone" ? "Codex Standalone Web" : "Codex Search",
     description: buildToolDescription(config),
     promptSnippet:
       config.searchApi === "standalone"
-        ? `${config.toolName}: open/fetch webpages, find text in pages, follow page link ids, take screenshots, and look up finance/weather/sports/time using the configured ChatGPT Codex subscription.`
+        ? `${config.toolName}: use only for explicit standalone webpage actions: open one URL, find text in that opened page, follow page link ids, take screenshots, or run finance/weather/sports/time lookups. Do not use for web search.`
         : `${config.toolName}: search the web using the configured ChatGPT Codex subscription.`,
-    promptGuidelines: [
-      `Use ${config.toolName} when current or source-backed information is needed.`,
+    promptGuidelines:
       config.searchApi === "standalone"
-        ? "Standalone mode can open/fetch URLs, find text within opened pages, click link ids, take screenshots, and run finance/weather/sports/time lookups. Send exactly one standalone action per tool call. Use codex_search, not codex_standalone_web, for web search. Do not use search_context_size low in standalone; use medium or high."
-        : `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
-      config.searchApi === "standalone"
-        ? "When the user asks to read or inspect a webpage, first use urls/open, then use follow-up find/click/screenshot actions on the same URL instead of shelling out to curl."
-        : "For webpage open/fetch, find, click, screenshot, finance, weather, sports, or time lookups, use codex_standalone_web when that tool is enabled.",
-      "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
-      "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
-    ],
+        ? [
+            `Use ${config.toolName} only when the user explicitly asks to open, read, inspect, find within, click inside, screenshot, or run finance/weather/sports/time lookup actions.`,
+            "Do not use codex_standalone_web for ordinary web search, source gathering, or batches; use codex_search for search queries.",
+            "Send exactly one standalone action per tool call. Do not combine urls/find/click/screenshot/lookup actions in one call.",
+            "For webpage workflows, first open one exact URL with urls. After a successful open, do not open the same page again unless the user asks to reload it.",
+            "For follow-up find/click/screenshot, use the same URL string the user opened. Do not switch between www and non-www hosts, add/remove trailing paths, or upgrade search_context_size just to retry.",
+            "Do not use search_context_size low in standalone; use medium unless the user explicitly asks for high.",
+            "If a follow-up page action fails because the page was not opened in this session, open the exact requested URL once, then retry the follow-up once.",
+            "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
+          ]
+        : [
+            `Use ${config.toolName} when current or source-backed information is needed.`,
+            `Batch up to ${config.batchSize} related queries in one call when grouped comparison matters; use separate calls when independent results unblock the next step.`,
+            "Use codex_standalone_web only when the user explicitly asks to open/read/inspect a webpage, find text inside an opened page, click a page link id, take a screenshot, or run finance/weather/sports/time lookups.",
+            "Do not call codex_standalone_web merely to improve or duplicate a codex_search result.",
+            "Choose freshness per request: use 'live' for news, prices, releases, availability, laws, schedules, or other time-sensitive facts; use 'cached' for stable facts and docs; use 'indexed' when OpenAI-indexed web access is enough but live browsing is not needed.",
+            "Do not ask the user for an access token; the tool uses pi's configured OpenAI Codex subscription.",
+          ],
     parameters: buildToolParameters(config),
 
     async execute(_toolCallId, params: ToolParameters, signal, onUpdate, ctx) {
