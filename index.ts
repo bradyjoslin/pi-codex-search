@@ -852,8 +852,8 @@ function renderPartial(details: WebSearchDetails | undefined, theme: Theme): str
 
 function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string {
   const lines: string[] = [];
-  const queriesPreview = renderQueriesPreview(details.queries, theme);
-  if (queriesPreview) lines.push(queriesPreview);
+  const successPreview = renderSuccessPreview(details, theme);
+  if (successPreview) lines.push(successPreview);
 
   const firstFailure = details.failures[0];
   if (firstFailure) {
@@ -862,12 +862,30 @@ function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string
   return lines.join("\n");
 }
 
-function renderQueriesPreview(queries: string[], theme: Theme): string {
-  if (queries.length === 0) return "";
-  if (queries.length === 1) {
-    return theme.fg("accent", `Query: ${formatInline(queries[0], 120)}`);
-  }
-  return [theme.fg("accent", "Queries:"), renderCallQueries(queries, theme)].join("\n");
+function renderSuccessPreview(details: WebSearchDetails, theme: Theme): string {
+  if (details.api !== "standalone") return "";
+  const success = details.successes[0];
+  if (!success) return "";
+  const line = firstNonEmptyLine(success.text);
+  if (!line) return "";
+  const actionType = success.searchCalls[0]?.actionType;
+  return theme.fg("dim", `${formatStandalonePreviewLabel(actionType)}: ${formatInline(line, 120)}`);
+}
+
+function firstNonEmptyLine(text: string): string {
+  return (
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ""
+  );
+}
+
+function formatStandalonePreviewLabel(actionType: string | undefined): string {
+  if (actionType === "open_page" || actionType === "click") return "Opened";
+  if (actionType === "find_in_page") return "Found";
+  if (actionType === "screenshot") return "Screenshot";
+  return "Result";
 }
 
 function renderCallQueries(queries: unknown[], theme: Theme): string {
