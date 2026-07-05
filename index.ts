@@ -80,6 +80,7 @@ interface WebSearchDetails {
   partial?: boolean;
   completed?: number;
   total?: number;
+  elapsedMs?: number;
 }
 
 function buildToolDescription(config: ResolvedConfig): string {
@@ -292,6 +293,8 @@ function buildTool(config: ResolvedConfig) {
         );
       }
 
+      const startedAt = Date.now();
+
       const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
       if (!token) {
         const err = new CodexError(
@@ -477,7 +480,9 @@ function buildTool(config: ResolvedConfig) {
 
         return {
           content: [{ type: "text", text: formatToolText(successes, failures) }],
-          details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
+          details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
+            elapsedMs: Date.now() - startedAt,
+          }),
         };
       }
 
@@ -584,7 +589,9 @@ function buildTool(config: ResolvedConfig) {
 
       return {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
-        details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
+        details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
+          elapsedMs: Date.now() - startedAt,
+        }),
       };
     },
 
@@ -604,7 +611,7 @@ function buildTool(config: ResolvedConfig) {
       } else {
         text += ` ${theme.fg("accent", `${labels.length} actions`)}`;
       }
-      text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
+      text += theme.fg("dim", ` ${formatModeLabel(config.searchApi, ctxSize, fresh)}`);
       if (labels.length > 1) {
         text += `\n${renderCallQueries(labels, theme)}`;
       }
@@ -627,26 +634,26 @@ function buildTool(config: ResolvedConfig) {
       const total = details.queryCount;
       const failed = details.failedQueryCount;
       const ok = total - failed;
-      const sourceCount = details.successes.reduce((acc, s) => acc + countSuccessSources(s), 0);
+      const resultSuffix = formatResultSuffix(details);
 
       let header: string;
       if (ok === 0) {
         header = theme.fg("warning", `⚠ Web search failed (${details.failure?.kind ?? "unknown"})`);
       } else if (failed > 0) {
-        const sourceSuffix =
-          sourceCount > 0 ? ` · ${sourceCount} source${sourceCount === 1 ? "" : "s"}` : "";
-        header = theme.fg("warning", `⚠ ${ok}/${total} queries succeeded${sourceSuffix}`);
+        header = theme.fg(
+          "warning",
+          `Did ${ok}/${total} ${formatOperationNoun(details, total)}${formatDurationSuffix(details.elapsedMs)}${resultSuffix}`,
+        );
       } else {
-        const querySuffix = total === 1 ? "" : ` across ${total} queries`;
-        const sourceText =
-          sourceCount > 0
-            ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
-            : "Search completed";
-        header = theme.fg("success", `✓ ${sourceText}${querySuffix}`);
+        const operationCount = countSuccessOperations(details);
+        header = theme.fg(
+          "success",
+          `Did ${operationCount} ${formatOperationNoun(details, operationCount)}${formatDurationSuffix(details.elapsedMs)}${resultSuffix}`,
+        );
       }
       header += theme.fg(
         "muted",
-        ` [${details.api}/${details.searchContextSize}/${details.freshness}]`,
+        ` ${formatModeLabel(details.api, details.searchContextSize, details.freshness)}`,
       );
 
       if (!expanded) {
@@ -736,7 +743,7 @@ function buildDetails(
   searchContextSize: SearchContextSize,
   successes: QuerySuccess[],
   failures: QueryFailure[],
-  extra?: { partial?: boolean; completed?: number; total?: number },
+  extra?: { partial?: boolean; completed?: number; total?: number; elapsedMs?: number },
 ): WebSearchDetails {
   const queries = successes.map((s) => s.query).concat(failures.map((f) => f.query));
   return {
@@ -788,8 +795,54 @@ function formatSuccessBlock(success: QuerySuccess, multiple: boolean): string {
   return multiple ? `## Query: ${success.query}\n\n${body}` : body;
 }
 
-function countSuccessSources(success: QuerySuccess): number {
-  return success.citations.length + Object.keys(success.refIds ?? {}).length;
+function countSuccessCitations(details: WebSearchDetails): number {
+  return details.successes.reduce((acc, success) => acc + success.citations.length, 0);
+}
+
+function countSuccessWebActions(details: WebSearchDetails): number {
+  return details.successes.reduce((acc, success) => acc + success.searchCalls.length, 0);
+}
+
+function countSuccessOperations(details: WebSearchDetails): number {
+  if (details.api === "responses") return details.queryCount;
+  const count = countSuccessWebActions(details);
+  return count > 0 ? count : details.queryCount;
+}
+
+function formatOperationNoun(details: WebSearchDetails, count: number): string {
+  const singular = details.api === "standalone" ? "action" : "search";
+  const plural = details.api === "standalone" ? "actions" : "searches";
+  return count === 1 ? singular : plural;
+}
+
+function formatResultSuffix(details: WebSearchDetails): string {
+  const parts: string[] = [];
+  const webActionCount = countSuccessWebActions(details);
+  if (details.api === "responses" && webActionCount > 0) {
+    parts.push(`${webActionCount} web action${webActionCount === 1 ? "" : "s"}`);
+  }
+
+  const citationCount = countSuccessCitations(details);
+  if (citationCount > 0) {
+    parts.push(`${citationCount} source${citationCount === 1 ? "" : "s"}`);
+  }
+
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
+function formatDurationSuffix(elapsedMs: number | undefined): string {
+  if (elapsedMs === undefined) return "";
+  if (elapsedMs < 1000) return ` in ${elapsedMs}ms`;
+  return ` in ${Math.max(1, Math.round(elapsedMs / 1000))}s`;
+}
+
+function formatModeLabel(
+  api: string,
+  searchContextSize: string,
+  freshness: string | undefined,
+): string {
+  if (api === "standalone") return `[${api}/${searchContextSize}]`;
+  return `[${api}/${searchContextSize}/${freshness ?? "live"}]`;
 }
 
 function formatFailureBlock(failure: QueryFailure, multiple: boolean): string {
@@ -808,8 +861,8 @@ function renderPartial(details: WebSearchDetails | undefined, theme: Theme): str
 
 function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string {
   const lines: string[] = [];
-  const queriesPreview = renderQueriesPreview(details.queries, theme);
-  if (queriesPreview) lines.push(queriesPreview);
+  const successPreview = renderSuccessPreview(details, theme);
+  if (successPreview) lines.push(successPreview);
 
   const firstFailure = details.failures[0];
   if (firstFailure) {
@@ -818,12 +871,30 @@ function renderCollapsedPreview(details: WebSearchDetails, theme: Theme): string
   return lines.join("\n");
 }
 
-function renderQueriesPreview(queries: string[], theme: Theme): string {
-  if (queries.length === 0) return "";
-  if (queries.length === 1) {
-    return theme.fg("accent", `Query: ${formatInline(queries[0], 120)}`);
-  }
-  return [theme.fg("accent", "Queries:"), renderCallQueries(queries, theme)].join("\n");
+function renderSuccessPreview(details: WebSearchDetails, theme: Theme): string {
+  if (details.api !== "standalone") return "";
+  const success = details.successes[0];
+  if (!success) return "";
+  const line = firstNonEmptyLine(success.text);
+  if (!line) return "";
+  const actionType = success.searchCalls[0]?.actionType;
+  return theme.fg("dim", `${formatStandalonePreviewLabel(actionType)}: ${formatInline(line, 120)}`);
+}
+
+function firstNonEmptyLine(text: string): string {
+  return (
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? ""
+  );
+}
+
+function formatStandalonePreviewLabel(actionType: string | undefined): string {
+  if (actionType === "open_page" || actionType === "click") return "Opened";
+  if (actionType === "find_in_page") return "Found";
+  if (actionType === "screenshot") return "Screenshot";
+  return "Result";
 }
 
 function renderCallQueries(queries: unknown[], theme: Theme): string {
