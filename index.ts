@@ -799,13 +799,6 @@ function countSuccessCitations(details: WebSearchDetails): number {
   return details.successes.reduce((acc, success) => acc + success.citations.length, 0);
 }
 
-function countSuccessRefs(details: WebSearchDetails): number {
-  return details.successes.reduce(
-    (acc, success) => acc + Object.keys(success.refIds ?? {}).length,
-    0,
-  );
-}
-
 function countSuccessWebActions(details: WebSearchDetails): number {
   return details.successes.reduce((acc, success) => acc + success.searchCalls.length, 0);
 }
@@ -832,11 +825,6 @@ function formatResultSuffix(details: WebSearchDetails): string {
   const citationCount = countSuccessCitations(details);
   if (citationCount > 0) {
     parts.push(`${citationCount} source${citationCount === 1 ? "" : "s"}`);
-  }
-
-  const refCount = countSuccessRefs(details);
-  if (details.api === "standalone" && refCount > 0) {
-    parts.push(`${refCount} ref${refCount === 1 ? "" : "s"}`);
   }
 
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
