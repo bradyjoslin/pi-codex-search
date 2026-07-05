@@ -80,6 +80,7 @@ interface WebSearchDetails {
   partial?: boolean;
   completed?: number;
   total?: number;
+  elapsedMs?: number;
 }
 
 function buildToolDescription(config: ResolvedConfig): string {
@@ -292,6 +293,8 @@ function buildTool(config: ResolvedConfig) {
         );
       }
 
+      const startedAt = Date.now();
+
       const token = await ctx.modelRegistry.getApiKeyForProvider(OPENAI_CODEX_PROVIDER);
       if (!token) {
         const err = new CodexError(
@@ -477,7 +480,9 @@ function buildTool(config: ResolvedConfig) {
 
         return {
           content: [{ type: "text", text: formatToolText(successes, failures) }],
-          details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
+          details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
+            elapsedMs: Date.now() - startedAt,
+          }),
         };
       }
 
@@ -584,7 +589,9 @@ function buildTool(config: ResolvedConfig) {
 
       return {
         content: [{ type: "text", text: formatToolText(successes, failures) }],
-        details: buildDetails(config, model, freshness, searchContextSize, successes, failures),
+        details: buildDetails(config, model, freshness, searchContextSize, successes, failures, {
+          elapsedMs: Date.now() - startedAt,
+        }),
       };
     },
 
@@ -627,22 +634,22 @@ function buildTool(config: ResolvedConfig) {
       const total = details.queryCount;
       const failed = details.failedQueryCount;
       const ok = total - failed;
-      const sourceCount = details.successes.reduce((acc, s) => acc + countSuccessSources(s), 0);
+      const resultSuffix = formatResultSuffix(details);
 
       let header: string;
       if (ok === 0) {
         header = theme.fg("warning", `⚠ Web search failed (${details.failure?.kind ?? "unknown"})`);
       } else if (failed > 0) {
-        const sourceSuffix =
-          sourceCount > 0 ? ` · ${sourceCount} source${sourceCount === 1 ? "" : "s"}` : "";
-        header = theme.fg("warning", `⚠ ${ok}/${total} queries succeeded${sourceSuffix}`);
+        header = theme.fg(
+          "warning",
+          `Did ${ok}/${total} ${formatOperationNoun(details, total)}${formatDurationSuffix(details.elapsedMs)}${resultSuffix}`,
+        );
       } else {
-        const querySuffix = total === 1 ? "" : ` across ${total} queries`;
-        const sourceText =
-          sourceCount > 0
-            ? `${sourceCount} source${sourceCount === 1 ? "" : "s"}`
-            : "Search completed";
-        header = theme.fg("success", `✓ ${sourceText}${querySuffix}`);
+        const operationCount = countSuccessOperations(details);
+        header = theme.fg(
+          "success",
+          `Did ${operationCount} ${formatOperationNoun(details, operationCount)}${formatDurationSuffix(details.elapsedMs)}${resultSuffix}`,
+        );
       }
       header += theme.fg(
         "muted",
@@ -736,7 +743,7 @@ function buildDetails(
   searchContextSize: SearchContextSize,
   successes: QuerySuccess[],
   failures: QueryFailure[],
-  extra?: { partial?: boolean; completed?: number; total?: number },
+  extra?: { partial?: boolean; completed?: number; total?: number; elapsedMs?: number },
 ): WebSearchDetails {
   const queries = successes.map((s) => s.query).concat(failures.map((f) => f.query));
   return {
@@ -788,8 +795,57 @@ function formatSuccessBlock(success: QuerySuccess, multiple: boolean): string {
   return multiple ? `## Query: ${success.query}\n\n${body}` : body;
 }
 
-function countSuccessSources(success: QuerySuccess): number {
-  return success.citations.length + Object.keys(success.refIds ?? {}).length;
+function countSuccessCitations(details: WebSearchDetails): number {
+  return details.successes.reduce((acc, success) => acc + success.citations.length, 0);
+}
+
+function countSuccessRefs(details: WebSearchDetails): number {
+  return details.successes.reduce(
+    (acc, success) => acc + Object.keys(success.refIds ?? {}).length,
+    0,
+  );
+}
+
+function countSuccessWebActions(details: WebSearchDetails): number {
+  return details.successes.reduce((acc, success) => acc + success.searchCalls.length, 0);
+}
+
+function countSuccessOperations(details: WebSearchDetails): number {
+  if (details.api === "responses") return details.queryCount;
+  const count = countSuccessWebActions(details);
+  return count > 0 ? count : details.queryCount;
+}
+
+function formatOperationNoun(details: WebSearchDetails, count: number): string {
+  const singular = details.api === "standalone" ? "action" : "search";
+  const plural = details.api === "standalone" ? "actions" : "searches";
+  return count === 1 ? singular : plural;
+}
+
+function formatResultSuffix(details: WebSearchDetails): string {
+  const parts: string[] = [];
+  const webActionCount = countSuccessWebActions(details);
+  if (details.api === "responses" && webActionCount > 0) {
+    parts.push(`${webActionCount} web action${webActionCount === 1 ? "" : "s"}`);
+  }
+
+  const citationCount = countSuccessCitations(details);
+  if (citationCount > 0) {
+    parts.push(`${citationCount} source${citationCount === 1 ? "" : "s"}`);
+  }
+
+  const refCount = countSuccessRefs(details);
+  if (details.api === "standalone" && refCount > 0) {
+    parts.push(`${refCount} ref${refCount === 1 ? "" : "s"}`);
+  }
+
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
+function formatDurationSuffix(elapsedMs: number | undefined): string {
+  if (elapsedMs === undefined) return "";
+  if (elapsedMs < 1000) return ` in ${elapsedMs}ms`;
+  return ` in ${Math.max(1, Math.round(elapsedMs / 1000))}s`;
 }
 
 function formatFailureBlock(failure: QueryFailure, multiple: boolean): string {
