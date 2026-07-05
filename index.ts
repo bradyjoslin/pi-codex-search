@@ -611,7 +611,7 @@ function buildTool(config: ResolvedConfig) {
       } else {
         text += ` ${theme.fg("accent", `${labels.length} actions`)}`;
       }
-      text += theme.fg("dim", ` [${config.searchApi}/${ctxSize}/${fresh}]`);
+      text += theme.fg("dim", ` ${formatModeLabel(config.searchApi, ctxSize, fresh)}`);
       if (labels.length > 1) {
         text += `\n${renderCallQueries(labels, theme)}`;
       }
@@ -653,7 +653,7 @@ function buildTool(config: ResolvedConfig) {
       }
       header += theme.fg(
         "muted",
-        ` [${details.api}/${details.searchContextSize}/${details.freshness}]`,
+        ` ${formatModeLabel(details.api, details.searchContextSize, details.freshness)}`,
       );
 
       if (!expanded) {
@@ -834,6 +834,15 @@ function formatDurationSuffix(elapsedMs: number | undefined): string {
   if (elapsedMs === undefined) return "";
   if (elapsedMs < 1000) return ` in ${elapsedMs}ms`;
   return ` in ${Math.max(1, Math.round(elapsedMs / 1000))}s`;
+}
+
+function formatModeLabel(
+  api: string,
+  searchContextSize: string,
+  freshness: string | undefined,
+): string {
+  if (api === "standalone") return `[${api}/${searchContextSize}]`;
+  return `[${api}/${searchContextSize}/${freshness ?? "live"}]`;
 }
 
 function formatFailureBlock(failure: QueryFailure, multiple: boolean): string {
