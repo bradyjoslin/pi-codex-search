@@ -36,7 +36,7 @@ This extension is for Pi workflows that need fresh or source-backed information:
 Install this hardened fork from an immutable commit:
 
 ```bash
-pi install git:github.com/bradyjoslin/pi-codex-search@14e81395bd32942ed4832df86269772c064d4ddd
+pi install git:github.com/bradyjoslin/pi-codex-search@28ef0c7d59adea549c0077ac75abff01426b95d3
 ```
 
 Or load a trusted local checkout:
@@ -244,15 +244,6 @@ npm test
 npm run lint
 npm run format:check
 ```
-
-## Release
-
-This repository follows the same release shape as `pi-provider-kimi-code`:
-
-- `release-naming.env` defines `PKG_NAME=pi-codex-search` and `TAG_PREFIX=v`.
-- `scripts/next-version.sh` computes the next semantic version from tags.
-- `.github/workflows/release-command.yml` creates release commits and tags.
-- `.github/workflows/release-on-tag.yml` publishes to npm with provenance and attaches `pi-codex-search.tar.gz` to the GitHub release.
 
 ## References
 
