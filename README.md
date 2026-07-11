@@ -1,8 +1,5 @@
 # pi-codex-search
 
-[![npm](https://img.shields.io/npm/v/pi-codex-search)](https://www.npmjs.com/package/pi-codex-search)
-[![license](https://img.shields.io/npm/l/pi-codex-search)](./LICENSE)
-
 **Search the web in Pi through your Codex subscription.**
 
 Pi keeps the harness small. Codex already has a ChatGPT-backed search path. This package connects the two: it adds a `codex_search` tool to Pi and uses the same `openai-codex` login Pi already knows about. An optional `codex_standalone_web` tool exposes Codex's experimental webpage actions.
@@ -36,25 +33,16 @@ This extension is for Pi workflows that need fresh or source-backed information:
 
 ## Install
 
-From npm:
+Install this hardened fork from an immutable commit:
 
 ```bash
-pi install npm:pi-codex-search
+pi install git:github.com/bradyjoslin/pi-codex-search@14e81395bd32942ed4832df86269772c064d4ddd
 ```
 
-Or load a local checkout without installing:
+Or load a trusted local checkout:
 
 ```bash
 pi -e /path/to/pi-codex-search
-```
-
-### Install from GitHub Release tarball
-
-If you prefer not to use npm, download the tarball from the [latest release](https://github.com/Leechael/pi-codex-search/releases/latest), extract it, and install from the local path:
-
-```bash
-curl -L https://github.com/Leechael/pi-codex-search/releases/latest/download/pi-codex-search.tar.gz | tar -xz -C /tmp
-pi install /tmp/pi-codex-search
 ```
 
 ## Sign in
@@ -178,8 +166,6 @@ Full schema, all fields optional:
 `enabled: false` skips tool registration entirely. The model will not see `codex_search` or `codex_standalone_web`.
 
 `standaloneEnabled: true` registers `codex_standalone_web`. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api`, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
-
-`searchApi: "standalone"` from older configs is treated as `standaloneEnabled: true` for compatibility.
 
 Environment variable equivalents:
 

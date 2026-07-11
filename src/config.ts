@@ -16,7 +16,6 @@ export interface PiCodexSearchConfig {
   clientVersion?: string;
   searchContextSize?: SearchContextSize;
   freshness?: Freshness;
-  searchApi?: SearchApi;
   standaloneEnabled?: boolean;
   batchSize?: number;
 }
@@ -50,7 +49,6 @@ export const CONFIG_FILE_NAME = "pi-codex-search.json";
 const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
 const FRESHNESS_VALUES: readonly Freshness[] = ["live", "cached", "indexed"] as const;
-const SEARCH_API_VALUES: readonly SearchApi[] = ["standalone", "responses"] as const;
 const ALLOWED_CONFIG_KEYS = new Set([
   "enabled",
   "toolName",
@@ -58,7 +56,6 @@ const ALLOWED_CONFIG_KEYS = new Set([
   "clientVersion",
   "searchContextSize",
   "freshness",
-  "searchApi",
   "standaloneEnabled",
   "batchSize",
 ]);
@@ -101,9 +98,7 @@ export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<
     defaultSearchContextSize: merged.searchContextSize ?? DEFAULT_SEARCH_CONTEXT_SIZE,
     defaultFreshness: merged.freshness ?? DEFAULT_FRESHNESS,
     searchApi: DEFAULT_SEARCH_API,
-    standaloneEnabled:
-      merged.standaloneEnabled ??
-      (merged.searchApi === "standalone" ? true : DEFAULT_STANDALONE_ENABLED),
+    standaloneEnabled: merged.standaloneEnabled ?? DEFAULT_STANDALONE_ENABLED,
     batchSize: merged.batchSize ?? DEFAULT_BATCH_SIZE,
     sources: {},
   };
@@ -178,8 +173,6 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   }
   const freshness = trimmedEnv("PI_CODEX_WEB_SEARCH_FRESHNESS");
   if (freshness !== undefined) env.freshness = freshness as Freshness;
-  const searchApi = trimmedEnv("PI_CODEX_WEB_SEARCH_API");
-  if (searchApi !== undefined) env.searchApi = searchApi as SearchApi;
   const standaloneEnabled = booleanEnv("PI_CODEX_WEB_STANDALONE_ENABLED");
   if (standaloneEnabled !== undefined) env.standaloneEnabled = standaloneEnabled;
   const batchSize = integerEnv("PI_CODEX_WEB_SEARCH_BATCH_SIZE");
@@ -224,12 +217,6 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
   if (config.standaloneEnabled !== undefined && typeof config.standaloneEnabled !== "boolean") {
     throw new Error(
       `Invalid standaloneEnabled in ${sourceLabel}: ${JSON.stringify(config.standaloneEnabled)}. Must be a boolean.`,
-    );
-  }
-  if (config.searchApi !== undefined && !SEARCH_API_VALUES.includes(config.searchApi)) {
-    throw new Error(
-      `Invalid searchApi in ${sourceLabel}: ${JSON.stringify(config.searchApi)}. ` +
-        `Expected one of ${SEARCH_API_VALUES.join(", ")}.`,
     );
   }
   if (config.batchSize !== undefined) {

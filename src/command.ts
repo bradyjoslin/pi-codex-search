@@ -37,8 +37,7 @@ const defaultTag = (value: string): string => `${value}${DEFAULT_SUFFIX}`;
 const isDefaultTag = (value: string): boolean => value.endsWith(DEFAULT_SUFFIX);
 
 function normalizeStandaloneSearchContext(config: PiCodexSearchConfig): boolean {
-  const standaloneEnabled = config.standaloneEnabled ?? config.searchApi === "standalone";
-  if (!standaloneEnabled || config.searchContextSize !== "low") return false;
+  if (!config.standaloneEnabled || config.searchContextSize !== "low") return false;
   config.searchContextSize = DEFAULT_SEARCH_CONTEXT_SIZE;
   return true;
 }
@@ -85,11 +84,10 @@ const CYCLE_FIELDS: CycleField[] = [
       "Register codex_standalone_web for page open/find/click/screenshot and domain lookups",
     values: () => [defaultTag(String(DEFAULT_STANDALONE_ENABLED)), "true", "false"],
     get: (c) =>
-      c.standaloneEnabled === undefined && c.searchApi !== "standalone"
+      c.standaloneEnabled === undefined
         ? defaultTag(String(DEFAULT_STANDALONE_ENABLED))
-        : String(c.standaloneEnabled ?? c.searchApi === "standalone"),
+        : String(c.standaloneEnabled),
     apply: (c, v) => {
-      delete c.searchApi;
       if (isDefaultTag(v)) delete c.standaloneEnabled;
       else c.standaloneEnabled = v === "true";
       normalizeStandaloneSearchContext(c);
@@ -114,7 +112,7 @@ const CYCLE_FIELDS: CycleField[] = [
     label: "Search context size",
     description: "Amount of web context to retrieve",
     values: (c) =>
-      c.standaloneEnabled || c.searchApi === "standalone"
+      c.standaloneEnabled
         ? [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "high"]
         : [defaultTag(DEFAULT_SEARCH_CONTEXT_SIZE), "low", "high"],
     get: (c) =>

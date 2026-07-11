@@ -27,7 +27,6 @@ const ENV_KEYS = [
   "PI_CODEX_WEB_SEARCH_CLIENT_VERSION",
   "PI_CODEX_WEB_SEARCH_CONTEXT_SIZE",
   "PI_CODEX_WEB_SEARCH_FRESHNESS",
-  "PI_CODEX_WEB_SEARCH_API",
   "PI_CODEX_WEB_STANDALONE_ENABLED",
   "PI_CODEX_WEB_SEARCH_BATCH_SIZE",
 ] as const;
@@ -272,11 +271,6 @@ describe("config loader", () => {
     assert.equal(resolved.defaultFreshness, "indexed");
     assert.equal(resolved.searchApi, "responses");
     assert.equal(resolved.standaloneEnabled, true);
-  });
-
-  it("rejects an invalid searchApi value", async () => {
-    process.env.PI_CODEX_WEB_SEARCH_API = "other";
-    await assert.rejects(loadConfig(cwd), /Invalid searchApi/);
   });
 
   it("rejects an invalid searchContextSize value", async () => {
