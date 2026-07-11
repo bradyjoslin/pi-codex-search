@@ -35,12 +35,7 @@ export type {
   TimeCommand,
   StandaloneCommandsOptions,
 } from "./modes/standalone.ts";
-export {
-  createTransport,
-  normalizeCodexBaseUrl,
-  resolveCodexEndpoint,
-  resolveCodexSearchEndpoint,
-} from "./transport.ts";
+export { createTransport, resolveCodexEndpoint, resolveCodexSearchEndpoint } from "./transport.ts";
 export type { CodexTransport } from "./transport.ts";
 export { createRefStore } from "./ref-store.ts";
 export type { RefStore } from "./ref-store.ts";
@@ -55,7 +50,6 @@ export type { FetchLike } from "./cookies.ts";
 export interface FetchCodexModelsOptions {
   token: string;
   accountId: string;
-  baseUrl?: string;
   clientVersion?: string;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
@@ -69,7 +63,6 @@ export async function fetchCodexModels(
   const transport = createTransport({
     token: options.token,
     accountId: options.accountId,
-    baseUrl: options.baseUrl,
     fetchImpl: options.fetchImpl as typeof fetch,
   });
 

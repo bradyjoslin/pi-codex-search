@@ -142,17 +142,6 @@ const TEXT_FIELDS: TextField[] = [
     },
   },
   {
-    id: "baseUrl",
-    label: "Base URL",
-    description: "Codex backend base URL",
-    defaultDisplay: "built-in",
-    get: (c) => c.baseUrl,
-    apply: (c, v) => {
-      if (v) c.baseUrl = v;
-      else delete c.baseUrl;
-    },
-  },
-  {
     id: "clientVersion",
     label: "Client version",
     description: "Client version sent to /codex/models",
@@ -458,7 +447,6 @@ async function loadModels(
   if (!accountId) return [];
 
   const opts: Parameters<typeof fetchCodexModels>[0] = { token, accountId };
-  if (resolved.baseUrl !== undefined) opts.baseUrl = resolved.baseUrl;
   if (resolved.clientVersion !== undefined) opts.clientVersion = resolved.clientVersion;
   return fetchCodexModels(opts);
 }
@@ -510,7 +498,6 @@ export function formatStatus(resolved: ResolvedConfig, cwd: string): string {
   lines.push(`  searchToolName      = codex_search`);
   lines.push(`  standaloneToolName  = ${STANDALONE_TOOL_NAME}`);
   lines.push(`  model               = ${resolved.model ?? "(auto from /codex/models)"}`);
-  lines.push(`  baseUrl             = ${resolved.baseUrl ?? "(default)"}`);
   lines.push(`  clientVersion       = ${resolved.clientVersion ?? "(default)"}`);
   lines.push(`  searchContextSize   = ${resolved.defaultSearchContextSize}`);
   lines.push(`  freshness           = ${resolved.defaultFreshness}`);

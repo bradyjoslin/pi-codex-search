@@ -168,7 +168,6 @@ Full schema, all fields optional:
   "enabled": true,
   "standaloneEnabled": false,
   "model": "gpt-5-codex",
-  "baseUrl": "https://chatgpt.com/backend-api",
   "clientVersion": "1.0.0",
   "searchContextSize": "medium",
   "freshness": "live",
@@ -178,7 +177,7 @@ Full schema, all fields optional:
 
 `enabled: false` skips tool registration entirely. The model will not see `codex_search` or `codex_standalone_web`.
 
-`standaloneEnabled: true` registers `codex_standalone_web`. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api` or `/v1/alpha/search` for `api.openai.com/v1`-style bases, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
+`standaloneEnabled: true` registers `codex_standalone_web`. It posts web commands to `/codex/alpha/search` on `chatgpt.com/backend-api`, accepts one action per tool call, stores returned ref ids for follow-up open/find/click/screenshot actions, disables `low` search context, and may be blocked by Cloudflare or backend session limits. Use `codex_search` for web search queries.
 
 `searchApi: "standalone"` from older configs is treated as `standaloneEnabled: true` for compatibility.
 
@@ -189,7 +188,6 @@ Environment variable equivalents:
 | `enabled`           | `PI_CODEX_WEB_SEARCH_ENABLED`        |
 | `standaloneEnabled` | `PI_CODEX_WEB_STANDALONE_ENABLED`    |
 | `model`             | `PI_CODEX_WEB_SEARCH_MODEL`          |
-| `baseUrl`           | `PI_CODEX_WEB_SEARCH_BASE_URL`       |
 | `clientVersion`     | `PI_CODEX_WEB_SEARCH_CLIENT_VERSION` |
 | `searchContextSize` | `PI_CODEX_WEB_SEARCH_CONTEXT_SIZE`   |
 | `freshness`         | `PI_CODEX_WEB_SEARCH_FRESHNESS`      |
@@ -198,6 +196,14 @@ Environment variable equivalents:
 `PI_CODEX_WEB_SEARCH_ENABLED` accepts `true` / `false` (case-insensitive). Any other value fails config loading.
 
 The settings dialog shows a unified `SettingsList` view. The model picker loads available Codex models asynchronously after the dialog opens, so the UI appears immediately even when `/codex/models` is slow. Interactive edits write the selected config file immediately. When you close the dialog, Pi reloads so the tool set and defaults apply without restarting the whole terminal.
+
+## Endpoint policy
+
+This fork sends authenticated Codex requests only to the official ChatGPT Codex backend:
+
+`https://chatgpt.com/backend-api`
+
+Custom endpoints and proxy configuration are not supported.
 
 ## Notes
 

@@ -13,7 +13,6 @@ export interface PiCodexSearchConfig {
   enabled?: boolean;
   toolName?: string;
   model?: string;
-  baseUrl?: string;
   clientVersion?: string;
   searchContextSize?: SearchContextSize;
   freshness?: Freshness;
@@ -26,7 +25,6 @@ export interface ResolvedConfig {
   enabled: boolean;
   toolName: string;
   model?: string;
-  baseUrl?: string;
   clientVersion?: string;
   defaultSearchContextSize: SearchContextSize;
   defaultFreshness: Freshness;
@@ -53,6 +51,17 @@ const TOOL_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]{0,63}$/;
 const CONTEXT_SIZES: readonly SearchContextSize[] = ["low", "medium", "high"] as const;
 const FRESHNESS_VALUES: readonly Freshness[] = ["live", "cached", "indexed"] as const;
 const SEARCH_API_VALUES: readonly SearchApi[] = ["standalone", "responses"] as const;
+const ALLOWED_CONFIG_KEYS = new Set([
+  "enabled",
+  "toolName",
+  "model",
+  "clientVersion",
+  "searchContextSize",
+  "freshness",
+  "searchApi",
+  "standaloneEnabled",
+  "batchSize",
+]);
 export const MIN_BATCH_SIZE = 1;
 export const MAX_BATCH_SIZE = 32;
 
@@ -99,7 +108,6 @@ export async function loadConfig(cwd: string, isProjectTrusted = true): Promise<
     sources: {},
   };
   if (merged.model !== undefined) resolved.model = merged.model;
-  if (merged.baseUrl !== undefined) resolved.baseUrl = merged.baseUrl;
   if (merged.clientVersion !== undefined) resolved.clientVersion = merged.clientVersion;
   if (homeConfig) resolved.sources.home = homeConfig;
   if (projectConfig) resolved.sources.project = projectConfig;
@@ -162,8 +170,6 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
   if (toolName !== undefined) env.toolName = toolName;
   const model = trimmedEnv("PI_CODEX_WEB_SEARCH_MODEL");
   if (model !== undefined) env.model = model;
-  const baseUrl = trimmedEnv("PI_CODEX_WEB_SEARCH_BASE_URL");
-  if (baseUrl !== undefined) env.baseUrl = baseUrl;
   const clientVersion = trimmedEnv("PI_CODEX_WEB_SEARCH_CLIENT_VERSION");
   if (clientVersion !== undefined) env.clientVersion = clientVersion;
   const searchContextSize = trimmedEnv("PI_CODEX_WEB_SEARCH_CONTEXT_SIZE");
@@ -185,6 +191,7 @@ function readEnvConfig(): PiCodexSearchConfig | undefined {
 }
 
 function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void {
+  validateKnownKeys(config as Record<string, unknown>, sourceLabel);
   if (config.enabled !== undefined && typeof config.enabled !== "boolean") {
     throw new Error(
       `Invalid enabled in ${sourceLabel}: ${JSON.stringify(config.enabled)}. Must be a boolean.`,
@@ -198,9 +205,6 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
   }
   if (config.model !== undefined && !isNonEmptyString(config.model)) {
     throw new Error(`Invalid model in ${sourceLabel}: must be a non-empty string.`);
-  }
-  if (config.baseUrl !== undefined && !isNonEmptyString(config.baseUrl)) {
-    throw new Error(`Invalid baseUrl in ${sourceLabel}: must be a non-empty string.`);
   }
   if (config.clientVersion !== undefined && !isNonEmptyString(config.clientVersion)) {
     throw new Error(`Invalid clientVersion in ${sourceLabel}: must be a non-empty string.`);
@@ -238,6 +242,14 @@ function validateConfig(config: PiCodexSearchConfig, sourceLabel: string): void 
         `Invalid batchSize in ${sourceLabel}: ${JSON.stringify(config.batchSize)}. ` +
           `Expected an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
       );
+    }
+  }
+}
+
+function validateKnownKeys(config: Record<string, unknown>, sourceLabel: string): void {
+  for (const key of Object.keys(config)) {
+    if (!ALLOWED_CONFIG_KEYS.has(key)) {
+      throw new Error(`Unknown configuration key ${JSON.stringify(key)} in ${sourceLabel}`);
     }
   }
 }

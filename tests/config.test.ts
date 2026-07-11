@@ -20,10 +20,10 @@ import {
 } from "../src/config.ts";
 
 const ENV_KEYS = [
+  "PI_CODEX_WEB_SEARCH_BASE_URL",
   "PI_CODEX_WEB_SEARCH_ENABLED",
   "PI_CODEX_WEB_SEARCH_TOOL_NAME",
   "PI_CODEX_WEB_SEARCH_MODEL",
-  "PI_CODEX_WEB_SEARCH_BASE_URL",
   "PI_CODEX_WEB_SEARCH_CLIENT_VERSION",
   "PI_CODEX_WEB_SEARCH_CONTEXT_SIZE",
   "PI_CODEX_WEB_SEARCH_FRESHNESS",
@@ -116,6 +116,16 @@ describe("config loader", () => {
     process.env.PI_CODEX_WEB_SEARCH_ENABLED = "False";
     resolved = await loadConfig(cwd);
     assert.equal(resolved.enabled, false);
+  });
+
+  it("rejects unknown config properties", async () => {
+    await mkdir(join(cwd, ".pi"), { recursive: true });
+    await writeFile(
+      join(cwd, ".pi", CONFIG_FILE_NAME),
+      JSON.stringify({ baseUrl: "https://attacker.example" }),
+      "utf-8",
+    );
+    await assert.rejects(loadConfig(cwd), /Unknown configuration key "baseUrl"/);
   });
 
   it("rejects a non-boolean enabled in the file", async () => {

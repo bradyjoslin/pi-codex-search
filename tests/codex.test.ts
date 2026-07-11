@@ -15,7 +15,6 @@ import {
   wrapFetchWithCookies,
   runStandaloneCommands,
   runResponsesSearch,
-  normalizeCodexBaseUrl,
   resolveCodexEndpoint,
   resolveCodexSearchEndpoint,
   selectDefaultModel,
@@ -24,43 +23,28 @@ import {
 import { formatQueryPreviewLines, selectStandalonePageRefId } from "../index.ts";
 
 describe("codex helpers", () => {
-  it("normalizes codex base URLs", () => {
-    assert.equal(normalizeCodexBaseUrl(undefined), "https://chatgpt.com/backend-api");
+  it("uses fixed ChatGPT Codex endpoints", () => {
     assert.equal(
-      normalizeCodexBaseUrl("https://chatgpt.com/backend-api/codex"),
-      "https://chatgpt.com/backend-api",
-    );
-    assert.equal(
-      normalizeCodexBaseUrl("https://chatgpt.com/backend-api/codex/responses"),
-      "https://chatgpt.com/backend-api",
-    );
-  });
-
-  it("resolves codex endpoints", () => {
-    assert.equal(
-      resolveCodexEndpoint("https://chatgpt.com/backend-api/codex", "responses"),
+      resolveCodexEndpoint("responses"),
       "https://chatgpt.com/backend-api/codex/responses",
     );
     assert.equal(
-      resolveCodexEndpoint("https://example.test/root", "models"),
-      "https://example.test/root/codex/models",
+      resolveCodexEndpoint("models"),
+      "https://chatgpt.com/backend-api/codex/models",
     );
     assert.equal(
-      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api"),
+      resolveCodexSearchEndpoint(),
       "https://chatgpt.com/backend-api/codex/alpha/search",
     );
-    assert.equal(
-      resolveCodexSearchEndpoint("https://api.openai.com"),
-      "https://api.openai.com/v1/alpha/search",
-    );
-    assert.equal(
-      resolveCodexSearchEndpoint("https://api.openai.com/v1"),
-      "https://api.openai.com/v1/alpha/search",
-    );
-    assert.equal(
-      resolveCodexSearchEndpoint("https://chatgpt.com/backend-api/codex/responses"),
-      "https://chatgpt.com/backend-api/codex/alpha/search",
-    );
+  });
+
+  it("uses the official ChatGPT backend", () => {
+    const transport = createTransport({
+      token: "test-token",
+      accountId: "test-account",
+      fetchImpl: async () => new Response(),
+    });
+    assert.equal(transport.baseUrl, "https://chatgpt.com/backend-api");
   });
 
   it("formats Codex user agent architecture like upstream", () => {
@@ -193,7 +177,6 @@ describe("codex helpers", () => {
       fetchCodexModels({
         token: "t",
         accountId: "a",
-        baseUrl: "https://example.test/backend",
         fetchImpl: fetchImpl as typeof fetch,
       }),
       (error: unknown) => {
@@ -224,7 +207,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -237,7 +219,7 @@ describe("codex helpers", () => {
       searchContextSize: "medium",
     });
 
-    assert.equal(requestedUrl, "https://example.test/backend/codex/alpha/search");
+    assert.equal(requestedUrl, "https://chatgpt.com/backend-api/codex/alpha/search");
     assert.equal(requestedHeaders.get("openai-beta"), "responses=experimental");
     assert.deepEqual(requestedBody, {
       id: "pi-codex-search",
@@ -353,7 +335,6 @@ describe("codex helpers", () => {
       const transport = createTransport({
         token: "token",
         accountId: "account",
-        baseUrl: "https://example.test/backend/codex",
         fetchImpl: fetchImpl as typeof fetch,
       });
 
@@ -398,7 +379,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
     });
     const sessionId = "pi-codex-session-123";
@@ -427,7 +407,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
     });
 
     await assert.rejects(
@@ -447,7 +426,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
     });
 
     await assert.rejects(
@@ -472,7 +450,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -492,7 +469,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
     });
 
     await assert.rejects(
@@ -532,7 +508,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -560,7 +535,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -588,7 +562,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend/codex",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -617,7 +590,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -649,7 +621,6 @@ describe("codex helpers", () => {
     const transport = createTransport({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend",
       fetchImpl: fetchImpl as typeof fetch,
     });
 
@@ -690,7 +661,6 @@ describe("codex helpers", () => {
     const models = await fetchCodexModels({
       token: "token",
       accountId: "account",
-      baseUrl: "https://example.test/backend",
       clientVersion: "9.9.9",
       fetchImpl: fetchImpl as typeof fetch,
     });

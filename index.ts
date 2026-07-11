@@ -326,7 +326,6 @@ function buildTool(config: ResolvedConfig) {
       const transport = createTransport({
         token,
         accountId,
-        baseUrl: config.baseUrl,
       });
 
       if (config.searchApi === "standalone") {
@@ -725,7 +724,6 @@ async function resolveSearchModel(
   const models = await fetchCodexModels({
     token,
     accountId,
-    baseUrl: config.baseUrl,
     clientVersion: config.clientVersion,
     signal,
   });
